@@ -1,0 +1,7 @@
+streamlit 
+moviepy 
+edge-tts 
+requests 
+Pillow 
+numpy 
+watchdog 
