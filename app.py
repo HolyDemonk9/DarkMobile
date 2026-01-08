@@ -9,14 +9,16 @@ from moviepy.editor import AudioFileClip, ImageClip, concatenate_videoclips
 import numpy as np
 import traceback
 import re
-import time
+from duckduckgo_search import DDGS
 
-# --- 1. CONFIGURATION ---
-st.set_page_config(page_title="Dark Studio: Stealth", layout="wide", page_icon="🕵️")
+# --- 1. CRITICAL PATCHES ---
+# Fixes the "Pink Screen" crash on cloud servers
+if not hasattr(Image, 'ANTIALIAS'):
+    Image.ANTIALIAS = Image.LANCZOS
+if not hasattr(Image, 'BILINEAR'):
+    Image.BILINEAR = Image.BICUBIC
 
-# PATCH IMAGE LIBRARY
-if not hasattr(Image, 'ANTIALIAS'): Image.ANTIALIAS = Image.LANCZOS
-if not hasattr(Image, 'BILINEAR'): Image.BILINEAR = Image.BILINEAR
+st.set_page_config(page_title="Dark Studio: Stock Hunter", layout="wide", page_icon="📸")
 
 # FOLDER SETUP
 if "project_path" not in st.session_state:
@@ -28,92 +30,77 @@ if "project_path" not in st.session_state:
 
 def folder(): return st.session_state.project_path
 
-# --- 2. STEALTH NETWORK ENGINE ---
-def get_random_headers():
-    # 1. Generate a random IP address
-    fake_ip = f"{random.randint(1, 255)}.{random.randint(1, 255)}.{random.randint(1, 255)}.{random.randint(1, 255)}"
-    
-    # 2. Pick a random browser (User-Agent)
-    user_agents = [
-        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36",
-        "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/14.0.3 Safari/605.1.15",
-        "Mozilla/5.0 (Linux; Android 10; SM-G960U) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.114 Mobile Safari/537.36",
-        "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/92.0.4515.107 Safari/537.36"
-    ]
-    
-    headers = {
-        "User-Agent": random.choice(user_agents),
-        "X-Forwarded-For": fake_ip,
-        "Client-IP": fake_ip,
-        "Real-IP": fake_ip,
-        "Referer": "https://www.google.com/"
-    }
-    return headers
-
-# --- 3. SMART PARSER ---
+# --- 2. SCRIPT PARSER ---
 def parse_script_by_sentences(raw_text):
+    # Split text by punctuation (. ! ?) to make scenes
     sentences = re.split(r'(?<=[.!?])\s+', raw_text)
     script_data = []
     for s in sentences:
         clean_s = s.strip()
         if len(clean_s) > 5:
             script_data.append({
-                "visual": f"Cinematic shot, hyper-realistic, 8k, {clean_s}", 
+                "search_term": clean_s, 
                 "audio": clean_s
             })
     return script_data
 
-# --- 4. THE STEALTH IMAGE GENERATOR ---
-def generate_images_stealth(script_data, is_short):
-    st.write(f"🕵️ Generating {len(script_data)} scenes (Stealth Mode)...")
-    
-    status_box = st.empty()
+# --- 3. STOCK IMAGE HUNTER ---
+def find_stock_images(script_data, is_short):
+    st.write(f"📸 Hunting for Stock Photos (Unsplash/Pexels)...")
     prog_bar = st.progress(0)
     
+    # Initialize Search Engine
+    ddgs = DDGS()
+    
+    # Dimensions (High Res)
     width, height = (720, 1280) if is_short else (1280, 720)
     
     for i, scene in enumerate(script_data):
         filename = f"scene_{i+1}.jpg"
         filepath = os.path.join(folder(), filename)
         
-        status_box.info(f"🔄 Requesting Scene {i+1} with new Identity...")
+        # KEY CHANGE: We force the search to look at Stock Sites
+        # We strip common words to get the "Core Subject" (e.g. "The Ocean" -> "Ocean")
+        core_subject = scene['search_term'].replace("The", "").replace(" is ", " ").replace(" a ", " ")
         
-        # Pollinations URL
-        safe_prompt = requests.utils.quote(scene['visual'])
-        seed = random.randint(0, 999999)
-        url = f"https://image.pollinations.ai/prompt/{safe_prompt}?width={width}&height={height}&nologo=true&seed={seed}&model=flux"
+        # We search specifically on Unsplash or Pexels for high quality
+        site = random.choice(["site:unsplash.com", "site:pexels.com"])
+        query = f"{core_subject} {site}"
         
-        downloaded = False
+        found = False
         try:
-            # USE FAKE HEADERS HERE
-            stealth_headers = get_random_headers()
+            # Search for real images
+            # We fetch 10 results to increase odds of finding a valid downloadable one
+            results = list(ddgs.images(query, max_results=10))
             
-            # 15s Timeout, verify=False (ignoring SSL helps sometimes with weird servers)
-            r = requests.get(url, headers=stealth_headers, timeout=15)
-            
-            if r.status_code == 200 and len(r.content) > 1000:
-                with open(filepath, "wb") as f: f.write(r.content)
-                downloaded = True
+            for res in results:
+                try:
+                    img_url = res['image']
+                    # Try to download
+                    r = requests.get(img_url, timeout=5)
+                    if r.status_code == 200:
+                        with open(filepath, "wb") as f: f.write(r.content)
+                        # Verify it's a real image and not a broken file
+                        with Image.open(filepath) as check:
+                            check.verify()
+                        found = True
+                        break # Stop looking if we found one
+                except:
+                    continue
+                    
         except Exception as e:
-            print(f"Failed to download: {e}")
-        
-        # FAILSAFE: If it fails, create a placeholder so app doesn't crash
-        if not downloaded:
-            status_box.warning(f"⚠️ Scene {i+1} failed. Created placeholder.")
-            # Create a simple colored background with text
-            img = Image.new('RGB', (width, height), (random.randint(20,50), 20, 40))
-            img.save(filepath)
-            
+            print(f"Stock search failed: {e}")
+
+        # Fallback: Create Black Placeholder if search fails
+        if not found:
+            Image.new('RGB', (width, height), (20, 20, 30)).save(filepath)
+
         script_data[i]["image_path"] = filepath
         prog_bar.progress((i+1)/len(script_data))
         
-        # Tiny pause to be safe
-        time.sleep(2)
-            
-    status_box.success("✅ Generation Complete!")
     return script_data
 
-# --- 5. RENDERER ---
+# --- 4. RENDERER ---
 def render_video(project_data, is_short):
     p = folder()
     status = st.empty()
@@ -130,6 +117,7 @@ def render_video(project_data, is_short):
         vc = AudioFileClip(voice_path)
         clip_dur = vc.duration / len(project_data)
         
+        # Resolution (480p Safe Mode to prevent crash)
         target_size = (480, 854) if is_short else (854, 480)
         
         clips = []
@@ -139,8 +127,7 @@ def render_video(project_data, is_short):
                 img = img.resize(target_size, Image.LANCZOS)
                 clips.append(ImageClip(np.array(img)).set_duration(clip_dur))
             except:
-                # If an image is broken, skip it or add black frame
-                pass
+                pass # Skip broken images
             
         final = concatenate_videoclips(clips, method="compose").set_audio(vc)
         output_path = os.path.join(p, "FINAL.mp4")
@@ -151,31 +138,33 @@ def render_video(project_data, is_short):
 
     except Exception as e:
         st.error(f"Render Error: {e}")
+        st.code(traceback.format_exc())
         return None
 
 # --- UI ---
-st.title("🕵️ Dark Studio: Stealth Mode")
+st.title("📸 Dark Studio: Stock Hunter")
 
 with st.sidebar:
     st.header("Settings")
     format_choice = st.radio("Format:", ["📱 Shorts (9:16)", "🖥️ Video (16:9)"])
     is_short = "Short" in format_choice
-    st.info("ℹ️ Uses Random IP Headers for every image request.")
+    
+    st.info("💡 **Source:** This version searches Unsplash.com and Pexels.com for professional stock photography.")
 
 # INPUT
-raw_script = st.text_area("Paste your story here:", height=150, 
-                          placeholder="The deep ocean is a world of mystery. Strange creatures swim in the dark. Pressure here is immense.")
+raw_script = st.text_area("Paste your script here:", height=200, 
+                          placeholder="The ocean is deep and mysterious. Giant whales swim in the blue water. Coral reefs are full of life.")
 
-if st.button("🚀 START STEALTH PRODUCTION", type="primary"):
+if st.button("🚀 FIND STOCK PHOTOS", type="primary"):
     if len(raw_script) < 5:
-        st.error("Empty script!")
+        st.error("Please write a script!")
     else:
         # 1. Parse
         data = parse_script_by_sentences(raw_script)
-        st.success(f"Detected {len(data)} scenes.")
+        st.success(f"Split into {len(data)} scenes.")
         
-        # 2. Generate (STEALTH)
-        final_data = generate_images_stealth(data, is_short)
+        # 2. Find Stock Images
+        final_data = find_stock_images(data, is_short)
         
         st.session_state.project_data = final_data
         st.session_state.is_short = is_short
@@ -184,21 +173,24 @@ if st.button("🚀 START STEALTH PRODUCTION", type="primary"):
 # EDITOR
 if "project_data" in st.session_state:
     st.divider()
-    st.header("🎞️ Timeline")
+    st.header("🎞️ Timeline Review")
     
     for i, scene in enumerate(st.session_state.project_data):
-        with st.expander(f"Scene {i+1}: \"{scene['audio'][:30]}...\"", expanded=True):
+        with st.expander(f"Scene {i+1}: \"{scene['audio'][:40]}...\"", expanded=True):
             c1, c2 = st.columns([1, 2])
             with c1:
                 if os.path.exists(scene["image_path"]):
+                    # SAFE LOAD to prevent pink screen
                     st.image(scene["image_path"])
-                up = st.file_uploader(f"Replace {i+1}", type=['jpg','png'], key=f"up_{i}")
+                
+                # Upload Manual Replacement
+                up = st.file_uploader(f"Replace Image {i+1}", type=['jpg','png'], key=f"up_{i}")
                 if up:
                     with open(scene["image_path"], "wb") as f: f.write(up.getbuffer())
                     st.rerun()
             with c2:
-                st.info(scene['audio'])
-                st.caption(scene['visual'])
+                st.info(f"🗣️ **Voice:** {scene['audio']}")
+                st.caption(f"🔍 **Search Query:** {scene['search_term']}")
 
     st.divider()
     if st.button("🔴 RENDER FINAL VIDEO", type="primary"):
@@ -206,4 +198,4 @@ if "project_data" in st.session_state:
         if vid_path:
             st.video(vid_path)
             with open(vid_path, "rb") as f:
-                st.download_button("📥 DOWNLOAD", f, "My_Stealth_Video.mp4")
+                st.download_button("📥 DOWNLOAD VIDEO", f, "Stock_Video.mp4")
