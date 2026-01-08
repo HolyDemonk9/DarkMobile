@@ -13,7 +13,7 @@ import urllib.parse
 # COMPATIBILITY
 if not hasattr(Image, 'ANTIALIAS'): Image.ANTIALIAS = Image.LANCZOS
 
-st.set_page_config(page_title="Dark Studio: Final", layout="wide", page_icon="💎")
+st.set_page_config(page_title="Dark Studio: Safe Mode", layout="wide", page_icon="🛡️")
 
 # FOLDER SETUP
 if "project_path" not in st.session_state:
@@ -107,7 +107,7 @@ def generate_pro_images(script_data, is_short):
         
     return script_data
 
-# --- 3. RENDERER ---
+# --- 3. RENDERER (Safe vs Pro) ---
 def zoom_in_effect(clip, zoom_ratio=0.04):
     def effect(get_frame, t):
         img = Image.fromarray(get_frame(t))
@@ -123,10 +123,11 @@ def zoom_in_effect(clip, zoom_ratio=0.04):
         return np.array(img)
     return clip.fl(effect)
 
-def render_video(project_data, is_short):
-    st.write("⚙️ Rendering Final Video...")
+def render_video(project_data, is_short, safe_mode=False):
+    st.write(f"⚙️ Rendering Video (Safe Mode: {safe_mode})...")
     p = folder()
     
+    # 1. Voice
     full_text = " ".join([s['audio'] for s in project_data])
     voice_path = os.path.join(p, "voice.mp3")
     asyncio.run(edge_tts.Communicate(full_text, "en-US-ChristopherNeural").save(voice_path))
@@ -134,18 +135,29 @@ def render_video(project_data, is_short):
     vc = AudioFileClip(voice_path)
     clip_duration = vc.duration / len(project_data)
     
+    # 2. Clips
     clips = []
-    target_size = (1080, 1920) if is_short else (1920, 1080)
+    
+    # In safe mode, we reduce resolution to ensure it finishes
+    if safe_mode:
+        target_size = (720, 1280) if is_short else (1280, 720)
+    else:
+        target_size = (1080, 1920) if is_short else (1920, 1080)
     
     for scene in project_data:
         try:
             img = Image.open(scene['image_path']).convert('RGB')
             img = img.resize(target_size, Image.LANCZOS)
             clip = ImageClip(np.array(img)).set_duration(clip_duration)
-            clip = zoom_in_effect(clip)
+            
+            # ONLY Apply heavy zoom if NOT in safe mode
+            if not safe_mode:
+                clip = zoom_in_effect(clip)
+                
             clips.append(clip)
         except: pass
         
+    # 3. Music
     try:
         m_path = os.path.join(p, "music.mp3")
         if not os.path.exists(m_path):
@@ -160,11 +172,13 @@ def render_video(project_data, is_short):
 
     final = concatenate_videoclips(clips, method="compose").set_audio(final_audio)
     output_path = os.path.join(p, "FINAL_MOVIE.mp4")
+    
+    # Write file
     final.write_videofile(output_path, fps=24, preset="ultrafast", codec="libx264")
     return output_path
 
 # --- UI ---
-st.title("💎 Dark Studio: Final")
+st.title("💎 Dark Studio: Production")
 
 with st.sidebar:
     st.header("Settings")
@@ -193,23 +207,40 @@ if "project_data" in st.session_state:
                     with open(scene["image_path"], "wb") as f: f.write(up.getbuffer())
                     st.rerun()
             with c2:
-                # --- UPDATED MANUAL TOOLS ---
-                st.caption("Step 1: Click the 'Copy' icon in the box below.")
+                st.caption("Step 1: Copy Prompt")
                 st.code(scene['visual'], language="text")
-                
-                st.caption("Step 2: Click the link below, then Paste.")
-                st.markdown(f"[**👉 Open Google Gemini**](https://gemini.google.com/app)")
-                
-                st.caption("Step 3: Download the image and upload it on the left.")
-                # -----------------------------
+                st.caption("Step 2: Generate")
+                st.markdown(f"[**👉 Open Gemini**](https://gemini.google.com/app)")
                 
                 new_text = st.text_area("Audio:", value=scene['audio'], key=f"txt_{i}")
                 st.session_state.project_data[i]['audio'] = new_text
 
-    if st.button("🔴 RENDER FINAL VIDEO", type="primary"):
-        with st.spinner("Rendering..."):
-            vid_path = render_video(st.session_state.project_data, st.session_state.get("is_short", True))
-            st.success("Done!")
-            st.video(vid_path)
-            with open(vid_path, "rb") as f:
-                st.download_button("📥 DOWNLOAD", f, "My_Movie.mp4")
+    st.divider()
+    st.subheader("🏁 Final Production")
+    
+    col1, col2 = st.columns(2)
+    
+    # TWO BUTTONS FOR SAFETY
+    with col1:
+        if st.button("🟢 FAST RENDER (Safe Mode)", help="No Zoom, 720p. Use this if Pro crashes."):
+            with st.spinner("Rendering Safe Video..."):
+                try:
+                    vid_path = render_video(st.session_state.project_data, st.session_state.get("is_short", True), safe_mode=True)
+                    st.success("Success!")
+                    st.video(vid_path)
+                    with open(vid_path, "rb") as f:
+                        st.download_button("📥 DOWNLOAD FAST", f, "Fast_Movie.mp4")
+                except Exception as e:
+                    st.error(f"Error: {e}")
+
+    with col2:
+        if st.button("🔴 PRO RENDER (High Quality)", help="Full HD + Zoom Effects. Might be slow."):
+            with st.spinner("Rendering High Quality..."):
+                try:
+                    vid_path = render_video(st.session_state.project_data, st.session_state.get("is_short", True), safe_mode=False)
+                    st.success("Success!")
+                    st.video(vid_path)
+                    with open(vid_path, "rb") as f:
+                        st.download_button("📥 DOWNLOAD PRO", f, "Pro_Movie.mp4")
+                except Exception as e:
+                    st.error(f"Render Crashed: {e} (Try Fast Render instead)")
