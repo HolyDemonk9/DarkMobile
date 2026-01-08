@@ -2,18 +2,17 @@ import streamlit as st
 import os
 import requests
 import random
-from duckduckgo_search import DDGS
-from PIL import Image
-import shutil
 import asyncio
 import edge_tts
-import numpy as np
+from PIL import Image
+import shutil
 from moviepy.editor import AudioFileClip, ImageClip, concatenate_videoclips, CompositeAudioClip, afx
+import numpy as np
 
 # COMPATIBILITY
 if not hasattr(Image, 'ANTIALIAS'): Image.ANTIALIAS = Image.LANCZOS
 
-st.set_page_config(page_title="Dark Studio: Pro", layout="wide", page_icon="💎")
+st.set_page_config(page_title="Dark Studio: Logic", layout="wide", page_icon="🧠")
 
 # FOLDER SETUP
 if "project_path" not in st.session_state:
@@ -24,55 +23,64 @@ if "project_path" not in st.session_state:
 
 def folder(): return st.session_state.project_path
 
-# --- 1. THE CALCULATOR (Custom Duration) ---
-def calculate_pacing(duration, scenes):
-    # Precise math for pacing
-    time_per_scene = duration / scenes
-    # Speaking rate (approx 2.5 words per second for a calm documentary voice)
-    total_words = int(duration * 2.5)
-    return time_per_scene, total_words
-
-# --- 2. THE PRO DIRECTOR (Smart Prompting) ---
-def run_pro_director(topic, n_scenes, total_words, is_short):
-    format_type = "Vertical 9:16 Portrait" if is_short else "Wide 16:9 Cinematic"
+# --- 1. THE LOGIC DIRECTOR (No Chat, Pure Code) ---
+def run_logic_director(topic, n_scenes, is_short):
+    st.info(f"🧠 Constructing Pro Script for '{topic}'...")
     
-    st.info(f"💎 AI is crafting a professional script & art prompts ({total_words} words)...")
+    # VISUAL TEMPLATES (The "Pro" Look)
+    visual_styles = [
+        "Cinematic wide shot, establishing shot of {t}, golden hour lighting, 8k, hyper-realistic",
+        "Macro close-up detail of {t}, intricate textures, depth of field, volumetric lighting, unreal engine 5",
+        "Low angle dramatic shot of {t}, dark moody atmosphere, fog, silhouette, mysterious vibe",
+        "Overhead drone view of {t}, symmetrical composition, high contrast, cinematic grading",
+        "Action shot of {t} in motion, dynamic blur, particle effects, 4k resolution",
+        "Abstract artistic representation of {t}, double exposure, dreamlike, surreal concept art"
+    ]
     
-    try:
-        ddgs = DDGS()
-        # WE USE "MAGIC KEYWORDS" IN THE SYSTEM PROMPT TO FORCE QUALITY
-        magic_style = "hyper-realistic, 8k resolution, volumetric lighting, dark moody atmosphere, highly detailed, Unreal Engine 5 render"
+    # AUDIO TEMPLATES (The Documentary Voice)
+    audio_intros = [
+        "The story of {t} is one of the world's greatest mysteries.",
+        "Few people truly understand the power and history of {t}.",
+        "Hidden beneath the surface, {t} holds a secret that changes everything.",
+    ]
+    audio_middles = [
+        "For centuries, experts have questioned its true origins.",
+        "The evidence suggests something far darker is at play here.",
+        "To understand the future, we must look at the hidden past.",
+        "It is a phenomenon that defies all simple explanations.",
+        "Every detail reveals a complex web of unanswered questions."
+    ]
+    audio_outros = [
+        "This is why {t} remains an unforgettable legend.",
+        "And that is the true secret hidden within the darkness.",
+        "The legend of {t} is only just beginning."
+    ]
+    
+    script_data = []
+    
+    for i in range(n_scenes):
+        # 1. Pick a Visual Style (Rotate through them so every scene is different)
+        style_template = visual_styles[i % len(visual_styles)]
+        visual_prompt = style_template.format(t=topic)
         
-        prompt = (f"Act as an award-winning documentary director. Write a script about '{topic}'."
-                  f"\n\nRULES:"
-                  f"\n1. List exactly {n_scenes} scenes."
-                  f"\n2. Total voiceover word count must be approx {total_words} words."
-                  f"\n3. VISUAL PROMPT: Describe a {format_type} image. MUST include these style keywords: {magic_style}."
-                  f"\n4. FORMAT: EXACTLY 'VISUAL PROMPT | VOICEOVER TEXT'"
-                  f"\n5. Do not number the lines. Just the content.")
+        # 2. Pick Audio Line
+        if i == 0:
+            audio_text = random.choice(audio_intros).format(t=topic)
+        elif i == n_scenes - 1:
+            audio_text = random.choice(audio_outros).format(t=topic)
+        else:
+            audio_text = random.choice(audio_middles).format(t=topic)
+            
+        script_data.append({
+            "visual": visual_prompt,
+            "audio": audio_text
+        })
         
-        # Using GPT-4o-mini via DuckDuckGo (Smartest Free Model)
-        response = ddgs.chat(prompt, model='gpt-4o-mini')
-        
-        script_data = []
-        for line in response.split('\n'):
-            if "|" in line:
-                parts = line.split("|")
-                if len(parts) >= 2:
-                    script_data.append({
-                        "visual": parts[0].strip(),
-                        "audio": parts[1].strip()
-                    })
-        
-        return script_data[:n_scenes]
+    return script_data
 
-    except Exception as e:
-        st.error(f"Director Error: {e}")
-        return []
-
-# --- 3. THE PRO ARTIST (High-Quality Generator) ---
+# --- 2. THE ARTIST (Flux Generator) ---
 def generate_pro_images(script_data, is_short):
-    st.write("🎨 Generating Professional Assets...")
+    st.write("🎨 Generating Professional Assets (Flux Engine)...")
     my_bar = st.progress(0)
     
     width, height = (1080, 1920) if is_short else (1920, 1080)
@@ -81,31 +89,26 @@ def generate_pro_images(script_data, is_short):
         filename = f"scene_{i+1}.jpg"
         filepath = os.path.join(folder(), filename)
         
-        # CLEAN THE PROMPT FOR URL
-        # We take the AI's detailed description and encode it safely
+        # URL ENCODE PROMPT
         safe_prompt = requests.utils.quote(scene['visual'])
-        
-        # POLLINATIONS AI (Best Free High-Quality Generator)
-        # We add a random seed so every image is unique
+        # Add seed for variety
         seed = random.randint(0, 99999)
+        
+        # POLLINATIONS URL (FLUX MODEL)
         url = f"https://image.pollinations.ai/prompt/{safe_prompt}?width={width}&height={height}&nologo=true&seed={seed}&model=flux"
         
-        # RETRY LOOP (Reliability Fix)
-        # If it fails, try 3 times before giving up
+        # Download with Retry
         downloaded = False
-        for attempt in range(3):
-            try:
-                r = requests.get(url, timeout=10)
-                if r.status_code == 200 and len(r.content) > 5000:
-                    with open(filepath, "wb") as f: f.write(r.content)
-                    downloaded = True
-                    break
-            except:
-                pass
+        try:
+            r = requests.get(url, timeout=15) # Give it time to render
+            if r.status_code == 200 and len(r.content) > 1000:
+                with open(filepath, "wb") as f: f.write(r.content)
+                downloaded = True
+        except: pass
         
-        # Backup: Black Screen with Text if ALL fails
+        # Backup Black Screen
         if not downloaded:
-            img = Image.new('RGB', (width, height), color=(10, 10, 20))
+            img = Image.new('RGB', (width, height), color=(15, 15, 20))
             img.save(filepath)
             
         script_data[i]["image_path"] = filepath
@@ -113,7 +116,7 @@ def generate_pro_images(script_data, is_short):
         
     return script_data
 
-# --- 4. RENDER ENGINE (Ken Burns Zoom) ---
+# --- 3. RENDER ENGINE (Zoom) ---
 def zoom_in_effect(clip, zoom_ratio=0.04):
     def effect(get_frame, t):
         img = Image.fromarray(get_frame(t))
@@ -130,7 +133,7 @@ def zoom_in_effect(clip, zoom_ratio=0.04):
     return clip.fl(effect)
 
 def render_video(project_data, is_short):
-    st.write("⚙️ Rendering Video...")
+    st.write("⚙️ Rendering Final Video...")
     p = folder()
     
     # Voiceover
@@ -139,21 +142,21 @@ def render_video(project_data, is_short):
     asyncio.run(edge_tts.Communicate(full_text, "en-US-ChristopherNeural").save(voice_path))
     
     vc = AudioFileClip(voice_path)
-    # Smart Calculation: Ensure video matches audio length perfectly
     clip_duration = vc.duration / len(project_data)
     
     clips = []
     target_size = (1080, 1920) if is_short else (1920, 1080)
     
     for scene in project_data:
-        img = Image.open(scene['image_path']).convert('RGB')
-        img = img.resize(target_size, Image.LANCZOS)
+        try:
+            img = Image.open(scene['image_path']).convert('RGB')
+            img = img.resize(target_size, Image.LANCZOS)
+            clip = ImageClip(np.array(img)).set_duration(clip_duration)
+            clip = zoom_in_effect(clip)
+            clips.append(clip)
+        except: pass
         
-        clip = ImageClip(np.array(img)).set_duration(clip_duration)
-        clip = zoom_in_effect(clip) # Apply Pro Zoom
-        clips.append(clip)
-        
-    # Music Mix
+    # Music
     try:
         m_path = os.path.join(p, "music.mp3")
         if not os.path.exists(m_path):
@@ -164,72 +167,55 @@ def render_video(project_data, is_short):
         music = AudioFileClip(m_path)
         if music.duration < vc.duration: music = afx.audio_loop(music, duration=vc.duration)
         else: music = music.subclip(0, vc.duration)
-        
         final_audio = CompositeAudioClip([vc, music.audio_fadeout(2).volumex(0.15)])
     except: final_audio = vc
 
     final = concatenate_videoclips(clips, method="compose").set_audio(final_audio)
-    output_path = os.path.join(p, "PRO_MOVIE.mp4")
+    output_path = os.path.join(p, "LOGIC_MOVIE.mp4")
     final.write_videofile(output_path, fps=24, preset="ultrafast", codec="libx264")
-    
     return output_path
 
-# --- UI LAYOUT ---
-st.title("💎 Dark Studio: Pro Edition")
+# --- UI ---
+st.title("🧠 Dark Studio: Logic Edition")
 
 with st.sidebar:
-    st.header("⚙️ Studio Settings")
-    
-    # 1. FORMAT
-    format_choice = st.radio("📺 Format:", ["📱 Shorts (9:16)", "🖥️ Video (16:9)"])
+    st.header("Settings")
+    format_choice = st.radio("Format:", ["📱 Shorts", "🖥️ Video"])
     is_short = "Short" in format_choice
+    topic = st.text_input("Topic:", "The Deep Ocean")
+    scenes = st.number_input("Scenes:", 3, 10, 5)
     
-    # 2. TOPIC
-    topic = st.text_input("Topic:", "The Lost City of Atlantis")
-    
-    # 3. NEW: CUSTOM DURATION INPUT
-    # You can type ANY number here now!
-    duration = st.number_input("⏱️ Video Duration (Seconds):", min_value=10, max_value=300, value=60, step=1)
-    
-    # 4. SCENE COUNT
-    scene_count = st.number_input("🎬 Scene Count:", min_value=3, max_value=20, value=6)
-    
-    if st.button("🚀 GENERATE PRO DRAFT", type="primary"):
-        tps, words = calculate_pacing(duration, scene_count)
-        data = run_pro_director(topic, scene_count, words, is_short)
+    if st.button("🚀 GENERATE DRAFT", type="primary"):
+        # 1. Use Logic Director (No API Keys needed)
+        data = run_logic_director(topic, scenes, is_short)
+        # 2. Generate Images
+        final_data = generate_pro_images(data, is_short)
         
-        if data:
-            final_data = generate_pro_images(data, is_short)
-            st.session_state.project_data = final_data
-            st.session_state.is_short = is_short
-            st.success("Draft Created!")
-            st.rerun()
+        st.session_state.project_data = final_data
+        st.session_state.is_short = is_short
+        st.rerun()
 
-# MAIN EDITOR
 if "project_data" in st.session_state:
-    st.header("🎞️ Director's Board")
-    
+    st.header("Review & Edit")
     for i, scene in enumerate(st.session_state.project_data):
-        with st.expander(f"Scene {i+1}", expanded=True):
+        with st.expander(f"Scene {i+1}: {scene['visual'][:30]}...", expanded=True):
             c1, c2 = st.columns([1, 2])
             with c1:
                 if os.path.exists(scene["image_path"]):
                     st.image(scene["image_path"])
-                # Manual Replace Option
                 up = st.file_uploader(f"Replace {i+1}", type=['jpg','png'], key=f"up_{i}")
                 if up:
                     with open(scene["image_path"], "wb") as f: f.write(up.getbuffer())
                     st.rerun()
             with c2:
-                st.info(f"🎨 **AI Prompt:** {scene['visual']}")
-                new_text = st.text_area("🎙️ **Voiceover:**", value=scene['audio'], key=f"txt_{i}")
+                st.code(scene['visual']) # Shows the PRO prompt
+                new_text = st.text_area("Audio:", value=scene['audio'], key=f"txt_{i}")
                 st.session_state.project_data[i]['audio'] = new_text
 
-    st.divider()
     if st.button("🔴 RENDER FINAL VIDEO", type="primary"):
-        with st.spinner("Rendering High-Quality Video..."):
+        with st.spinner("Rendering..."):
             vid_path = render_video(st.session_state.project_data, st.session_state.get("is_short", True))
-            st.success("Render Complete!")
+            st.success("Done!")
             st.video(vid_path)
             with open(vid_path, "rb") as f:
-                st.download_button("📥 DOWNLOAD VIDEO", f, "Pro_Movie.mp4")
+                st.download_button("📥 DOWNLOAD", f, "My_Movie.mp4")
