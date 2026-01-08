@@ -8,6 +8,7 @@ import urllib.parse
 import re
 import numpy as np
 import io
+import random
 from PIL import Image
 from moviepy.editor import AudioFileClip, ImageClip, concatenate_videoclips, CompositeAudioClip, afx
 import shutil
@@ -32,12 +33,12 @@ def folder(): return st.session_state.project_path
 # --- FUNCTIONS ---
 
 def get_private_image(prompt, token, filename):
-    # This connects to Stable Diffusion XL (High Quality)
-    API_URL = "https://api-inference.huggingface.co/models/stabilityai/stable-diffusion-xl-base-1.0"
+    # SWITCHED TO LIGHTER MODEL (V1.5) for reliability
+    API_URL = "https://api-inference.huggingface.co/models/runwayml/stable-diffusion-v1-5"
     headers = {"Authorization": f"Bearer {token}"}
     
-    # Retry logic (3 times)
-    for i in range(3):
+    # Retry logic (Extended patience)
+    for i in range(4):
         try:
             response = requests.post(API_URL, headers=headers, json={"inputs": prompt})
             if response.status_code == 200:
@@ -46,20 +47,34 @@ def get_private_image(prompt, token, filename):
                 image.save(os.path.join(folder(), filename))
                 return True
             elif "loading" in response.text.lower():
-                time.sleep(5) # Model is waking up, wait
-        except:
-            time.sleep(2)
+                st.toast(f"Model waking up... ({i+1}/4)")
+                time.sleep(5) # Wait for model to load
+            else:
+                st.warning(f"HF Error: {response.status_code} - {response.text[:50]}...")
+                time.sleep(1)
+        except Exception as e:
+            time.sleep(1)
+    return False
+
+def get_stock_photo(seed, filename):
+    # Backup: Professional Stock Photos
+    try:
+        u_stock = f"https://picsum.photos/1080/1920?random={seed}"
+        r = requests.get(u_stock, timeout=5)
+        if r.status_code == 200:
+            with open(os.path.join(folder(), filename), "wb") as f: f.write(r.content)
+            return True
+    except: pass
     return False
 
 def get_images(topic, token):
     if not token.startswith("hf_"):
-        st.error("❌ Invalid Token! Please paste your Hugging Face Token at the top.")
+        st.error("❌ Invalid Token! Check top of page.")
         return
 
     style = st.session_state.get("stolen_prompt", "cinematic, dark, 8k")
-    st.write(f"🎨 Generating Scenes (Private Model)...")
+    st.write(f"🎨 Generating Scenes (Private API)...")
     
-    # Generate Scenes List
     scenes = [f"A cinematic 8k shot of {topic}, scene {i+1}" for i in range(5)]
     
     bar = st.progress(0)
@@ -68,23 +83,25 @@ def get_images(topic, token):
     for i, s in enumerate(scenes):
         clean = s.replace("-", "").strip()
         filename = f"{i+1:03}.jpg"
-        prompt = f"{clean}, {style}, highly detailed, 8k masterpiece"
+        prompt = f"{clean}, {style}, highly detailed"
         
-        # USE PRIVATE GENERATOR
+        # 1. TRY PRIVATE AI
         saved = get_private_image(prompt, token, filename)
         
-        if saved: success_count += 1
-        else:
-            # Emergency Backup (Black Placeholder)
+        # 2. FALLBACK TO STOCK PHOTO (If AI fails)
+        if not saved:
+            st.toast(f"AI busy, using Stock Photo for Scene {i+1}")
+            saved = get_stock_photo(i, filename)
+        
+        # 3. FALLBACK TO BLACK SCREEN (Last resort)
+        if not saved:
             img = Image.new('RGB', (1080, 1920), color=(10, 10, 10))
             img.save(os.path.join(folder(), filename))
 
+        if saved: success_count += 1
         bar.progress((i + 1) / 5)
         
-    if success_count == 5:
-        st.success(f"✅ 5/5 Images Generated Successfully!")
-    else:
-        st.warning(f"⚠️ Generated {success_count} images. Some placeholders were used.")
+    st.success(f"✅ {success_count}/5 Images Ready!")
 
 def generate_ai_script(topic):
     st.info("🧠 AI is thinking...")
