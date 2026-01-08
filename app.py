@@ -7,8 +7,8 @@ import edge_tts
 import urllib.parse
 import re
 import numpy as np
-import random
-from PIL import Image, ImageDraw, ImageFont
+import io
+from PIL import Image
 from moviepy.editor import AudioFileClip, ImageClip, concatenate_videoclips, CompositeAudioClip, afx
 import shutil
 
@@ -16,7 +16,7 @@ import shutil
 if not hasattr(Image, 'ANTIALIAS'): Image.ANTIALIAS = Image.LANCZOS
 
 # CONFIG
-st.set_page_config(page_title="Dark Studio Mobile", layout="centered", page_icon="🎬")
+st.set_page_config(page_title="Dark Studio Private", layout="centered", page_icon="🔒")
 
 # FOLDER SETUP
 if "project_path" not in st.session_state:
@@ -31,91 +31,71 @@ def folder(): return st.session_state.project_path
 
 # --- FUNCTIONS ---
 
-def get_images(topic):
-    style = st.session_state.get("stolen_prompt", "cinematic, dark, 8k")
-    st.write(f"🎨 Generating Scenes for: {topic}...")
+def get_private_image(prompt, token, filename):
+    # This connects to Stable Diffusion XL (High Quality)
+    API_URL = "https://api-inference.huggingface.co/models/stabilityai/stable-diffusion-xl-base-1.0"
+    headers = {"Authorization": f"Bearer {token}"}
     
-    # 1. Get Scene List (FORCE 5 ITEMS)
-    seed = int(time.time())
-    scenes = []
-    try:
-        u = f"https://text.pollinations.ai/{urllib.parse.quote(f'List 5 distinct visual scenes for {topic}. Style: {style}. Seed: {seed}. Format: - Description')}"
-        # We strictly look for lines starting with "-"
-        raw_scenes = [l for l in requests.get(u).text.split('\n') if l.strip().startswith("-")]
-        scenes = raw_scenes[:5] # Take top 5
-    except: pass
-
-    # FAILSAFE: If we have less than 5, fill the gaps manually
-    while len(scenes) < 5:
-        scenes.append(f"- A mysterious cinematic shot of {topic}, scene {len(scenes)+1}")
-    
-    st.caption(f"Brainstormed {len(scenes)} Scenes. Generating Images...")
-
-    bar = st.progress(0)
-    
-    # 2. GENERATE IMAGES (Indestructible Loop)
-    for i, s in enumerate(scenes):
-        clean = re.sub(r'^- ', '', s)
-        filename = f"{i+1:03}.jpg"
-        filepath = os.path.join(folder(), filename)
-        
-        # Strategy A: AI Generation
-        prompt = urllib.parse.quote(f"{clean}, {style}, 8k")
-        u_ai = f"https://image.pollinations.ai/prompt/{prompt}?width=1080&height=1920&nologo=true&seed={random.randint(0,99999)}"
-        
-        # Strategy B: Stock Photo Backup
-        u_stock = f"https://picsum.photos/1080/1920?random={i+seed}"
-        
-        saved = False
-        
-        # Attempt 1: AI
+    # Retry logic (3 times)
+    for i in range(3):
         try:
-            r = requests.get(u_ai, timeout=8)
-            if r.status_code == 200 and len(r.content) > 4000: # Check file size > 4KB
-                with open(filepath, "wb") as f: f.write(r.content)
-                saved = True
-        except: pass
+            response = requests.post(API_URL, headers=headers, json={"inputs": prompt})
+            if response.status_code == 200:
+                image_bytes = response.content
+                image = Image.open(io.BytesIO(image_bytes))
+                image.save(os.path.join(folder(), filename))
+                return True
+            elif "loading" in response.text.lower():
+                time.sleep(5) # Model is waking up, wait
+        except:
+            time.sleep(2)
+    return False
+
+def get_images(topic, token):
+    if not token.startswith("hf_"):
+        st.error("❌ Invalid Token! Please paste your Hugging Face Token at the top.")
+        return
+
+    style = st.session_state.get("stolen_prompt", "cinematic, dark, 8k")
+    st.write(f"🎨 Generating Scenes (Private Model)...")
+    
+    # Generate Scenes List
+    scenes = [f"A cinematic 8k shot of {topic}, scene {i+1}" for i in range(5)]
+    
+    bar = st.progress(0)
+    success_count = 0
+    
+    for i, s in enumerate(scenes):
+        clean = s.replace("-", "").strip()
+        filename = f"{i+1:03}.jpg"
+        prompt = f"{clean}, {style}, highly detailed, 8k masterpiece"
         
-        # Attempt 2: Stock Photo (If AI failed)
-        if not saved:
-            try:
-                r = requests.get(u_stock, timeout=8)
-                if r.status_code == 200:
-                    with open(filepath, "wb") as f: f.write(r.content)
-                    saved = True
-            except: pass
-            
-        # Attempt 3: Black Placeholder (Last Resort)
-        if not saved:
+        # USE PRIVATE GENERATOR
+        saved = get_private_image(prompt, token, filename)
+        
+        if saved: success_count += 1
+        else:
+            # Emergency Backup (Black Placeholder)
             img = Image.new('RGB', (1080, 1920), color=(10, 10, 10))
-            d = ImageDraw.Draw(img)
-            # Try drawing text, ignore font errors
-            try: d.text((50, 900), f"Scene {i+1}: {clean[:20]}...", fill=(255, 255, 255))
-            except: pass
-            img.save(filepath)
+            img.save(os.path.join(folder(), filename))
 
         bar.progress((i + 1) / 5)
-        time.sleep(1) 
-    
-    # Final Count Check
-    valid_imgs = len([f for f in os.listdir(folder()) if f.endswith(".jpg")])
-    if valid_imgs == 5:
-        st.success(f"✅ Success! {valid_imgs} Images Ready.")
+        
+    if success_count == 5:
+        st.success(f"✅ 5/5 Images Generated Successfully!")
     else:
-        st.warning(f"⚠️ Only {valid_imgs}/5 Images generated. Video might be short.")
+        st.warning(f"⚠️ Generated {success_count} images. Some placeholders were used.")
 
 def generate_ai_script(topic):
     st.info("🧠 AI is thinking...")
     style = st.session_state.get("stolen_prompt", "dark and mysterious")
     prompt = f"Write a 150 word engaging YouTube script about '{topic}'. Style: {style}. Do not include scene directions, just the voiceover text."
-    
     try:
         txt = requests.get(f"https://text.pollinations.ai/{urllib.parse.quote(prompt)}").text
         st.session_state.generated_script = txt
         st.success("✅ Script Written!")
         st.rerun() 
-    except Exception as e:
-        st.error(f"AI Failed: {e}")
+    except: st.error("AI Script Failed")
 
 def get_audio_from_text(text_script):
     st.write("🎙️ Recording Voice...")
@@ -127,21 +107,20 @@ def get_audio_from_text(text_script):
     st.success("✅ Audio Ready!")
 
 def render_video():
-    st.write("🎬 Rendering (Safe Mode)...")
+    st.write("🎬 Rendering...")
     p = folder()
     try:
         if not os.path.exists(os.path.join(p, "voice.mp3")): 
-            st.error("❌ No Audio! Record voice first.")
+            st.error("❌ No Audio!")
             return
         
         vc = AudioFileClip(os.path.join(p, "voice.mp3"))
         files = sorted([os.path.join(p, f) for f in os.listdir(p) if f.endswith(".jpg")])
-        if len(files) == 0:
-            st.error("❌ No images found! Click 'Generate Scenes' first.")
+        if not files:
+            st.error("❌ No images!")
             return
 
-        # BUILD CLIPS (Using PIL Method)
-        dur = max(vc.duration / len(files), 2) # Min duration 2s
+        dur = max(vc.duration / len(files), 2)
         clips = []
         for f in files:
             try:
@@ -150,21 +129,16 @@ def render_video():
                 clips.append(ImageClip(np.array(pil_img)).set_duration(dur))
             except: pass
 
-        if not clips:
-            st.error("❌ Critical: All images failed to load.")
-            return
-
         # SAFE MUSIC
         final_audio = vc
         try:
             m_url = "https://ia800300.us.archive.org/17/items/TheSlenderManSong/Anxiety.mp3"
             r = requests.get(m_url, timeout=5)
-            if r.status_code == 200:
-                with open(os.path.join(p, "music.mp3"), "wb") as f: f.write(r.content)
-                mc = AudioFileClip(os.path.join(p, "music.mp3"))
-                if mc.duration < vc.duration: mc = afx.audio_loop(mc, duration=vc.duration)
-                else: mc = mc.subclip(0, vc.duration)
-                final_audio = CompositeAudioClip([vc, mc.volumex(0.15)])
+            with open(os.path.join(p, "music.mp3"), "wb") as f: f.write(r.content)
+            mc = AudioFileClip(os.path.join(p, "music.mp3"))
+            if mc.duration < vc.duration: mc = afx.audio_loop(mc, duration=vc.duration)
+            else: mc = mc.subclip(0, vc.duration)
+            final_audio = CompositeAudioClip([vc, mc.volumex(0.15)])
         except: pass
 
         final = concatenate_videoclips(clips, method="compose").set_audio(final_audio)
@@ -179,10 +153,11 @@ def render_video():
     except Exception as e: st.error(f"Render Failed: {e}")
 
 # --- UI LAYOUT ---
-st.title("📱 Dark Studio v3.5")
-st.caption("School Project: Auto-Fill Edition")
+st.title("🔒 Dark Studio: Private Edition")
 
-# 1. STRATEGY
+# TOKEN INPUT
+hf_token = st.text_input("Paste Hugging Face Token (Starts with hf_...):", type="password")
+
 st.header("1. Strategy")
 mode = st.radio("Mode:", ["Manual Vibe", "YouTube Hacker"])
 if mode == "YouTube Hacker":
@@ -194,30 +169,26 @@ if mode == "YouTube Hacker":
 
 topic = st.text_input("Topic:", "The Mystery of the Ocean")
 
-# 2. CONTENT
 st.header("2. Content")
 col1, col2 = st.columns(2)
 
-if col1.button("Generate Scenes (Force 5)"):
-    get_images(topic)
+if col1.button("Generate Images (Private)"):
+    if len(hf_token) < 5:
+        st.error("⚠️ You must paste your Token at the top first!")
+    else:
+        get_images(topic, hf_token)
 
 if col2.button("✨ WRITE SCRIPT"):
     generate_ai_script(topic)
 
-# SCRIPT EDITOR
 st.subheader("Script Editor")
 script_text = st.text_area("Review Script:", value=st.session_state.generated_script, height=150)
 
 if st.button("🎙️ Record Voice"):
-    if len(script_text) < 5:
-        st.error("Script is empty!")
-    else:
-        get_audio_from_text(script_text)
+    get_audio_from_text(script_text)
 
-# 3. PRODUCTION
 st.header("3. Production")
-img_count = len([f for f in os.listdir(folder()) if f.endswith(".jpg")])
-st.caption(f"Status: {img_count} Images Ready")
-
 if st.button("RENDER VIDEO", type="primary"):
     render_video()
+
+st.success("✅ SYSTEM READY")
