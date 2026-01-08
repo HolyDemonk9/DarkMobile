@@ -1,19 +1,21 @@
 import streamlit as st
+import google.generativeai as genai
 import os
 import requests
 import time
+import urllib.parse
+import random
+import numpy as np
+from PIL import Image, ImageDraw, ImageFont
+from moviepy.editor import AudioFileClip, ImageClip, concatenate_videoclips, CompositeAudioClip, afx
 import asyncio
 import edge_tts
-import urllib.parse
-import re
-import numpy as np
-import random
-from PIL import Image, ImageOps
-from moviepy.editor import AudioFileClip, ImageClip, concatenate_videoclips, CompositeAudioClip, afx, vfx
 import shutil
 
-# CONFIG
-st.set_page_config(page_title="Dark Studio: Cinematic", layout="centered", page_icon="🎥")
+# COMPATIBILITY
+if not hasattr(Image, 'ANTIALIAS'): Image.ANTIALIAS = Image.LANCZOS
+
+st.set_page_config(page_title="Google AI Storyboard", layout="wide", page_icon="🤖")
 
 # FOLDER SETUP
 if "project_path" not in st.session_state:
@@ -22,198 +24,149 @@ if "project_path" not in st.session_state:
         shutil.rmtree(st.session_state.project_path) 
     os.makedirs(st.session_state.project_path)
 
-if "generated_script" not in st.session_state: st.session_state.generated_script = ""
+if "storyboard" not in st.session_state: st.session_state.storyboard = []
 
 def folder(): return st.session_state.project_path
 
-# --- FUNCTIONS ---
+# --- GOOGLE GEMINI ROBOT ---
+def run_google_director(api_key, topic):
+    st.info("🤖 Google Gemini is directing the scene...")
+    try:
+        genai.configure(api_key=api_key)
+        model = genai.GenerativeModel('gemini-1.5-flash')
+        
+        # Ask Google to plan 6 visual panels
+        prompt = (f"Act as a darker, cinematic film director. Create a 6-panel storyboard for a video about '{topic}'. "
+                  f"For each panel, provide a vivid, highly detailed visual description suitable for image generation. "
+                  f"Format: Panel 1: [Description] | Panel 2: [Description]...")
+        
+        response = model.generate_content(prompt)
+        text = response.text
+        
+        # Parse the response into a list
+        scenes = []
+        for line in text.split('\n'):
+            if "Panel" in line and ":" in line:
+                # Clean up the text to get just the description
+                desc = line.split(":", 1)[1].strip()
+                scenes.append(desc)
+        
+        # Failsafe if parsing fails
+        if len(scenes) < 6:
+            scenes = [f"A cinematic shot of {topic}, scene {i+1}" for i in range(6)]
+            
+        return scenes[:6]
+    except Exception as e:
+        st.error(f"Google AI Error: {e}")
+        return [f"A cinematic shot of {topic}, scene {i+1}" for i in range(6)]
 
-def get_images(topic):
-    st.write(f"🎨 gathering Cinematic Assets for: {topic}...")
+# --- IMAGE GENERATOR ---
+def generate_storyboard_images(scenes):
+    st.write("🎨 Painting Storyboard...")
+    generated_files = []
     
-    # We will FORCE 6 images to ensure fast pacing
-    total_images = 6
-    bar = st.progress(0)
+    my_bar = st.progress(0)
     
-    # Clean the topic for search
-    search_term = urllib.parse.quote(topic)
-    
-    for i in range(total_images):
-        filename = f"{i+1:03}.jpg"
+    for i, desc in enumerate(scenes):
+        filename = f"panel_{i+1}.jpg"
         filepath = os.path.join(folder(), filename)
         
-        # STRATEGY: High-Speed Stock Search (No Keys Required)
-        # This uses different random seeds to get different photos of the SAME topic
-        u_stock = f"https://image.pollinations.ai/prompt/{search_term}%20cinematic%20photography?width=1080&height=1920&nologo=true&seed={random.randint(0, 99999)}"
+        # Use the "Smart Prompt" from Gemini to search for the perfect image
+        # We clean it to keep it simple for the image engine
+        search_prompt = urllib.parse.quote(desc[:100] + " cinematic lighting 8k")
+        
+        u = f"https://image.pollinations.ai/prompt/{search_prompt}?width=1080&height=1920&nologo=true&seed={random.randint(0,999)}"
         
         try:
-            # Add a random number to the request to trick the cache
-            r = requests.get(u_stock, timeout=6)
-            if r.status_code == 200 and len(r.content) > 2000:
+            r = requests.get(u, timeout=6)
+            if r.status_code == 200:
                 with open(filepath, "wb") as f: f.write(r.content)
             else:
-                raise Exception("Image failed")
+                raise Exception("Download failed")
         except:
-            # Backup: If Pollinations fails, use Picsum (Abstract/Dark)
-            try:
-                u_backup = f"https://picsum.photos/1080/1920?random={i}"
-                r = requests.get(u_backup, timeout=5)
-                with open(filepath, "wb") as f: f.write(r.content)
-            except: 
-                # Last Resort: Black Screen
-                img = Image.new('RGB', (1080, 1920), color=(10, 10, 10))
-                img.save(filepath)
-
-        bar.progress((i + 1) / total_images)
-        time.sleep(0.5) 
-    
-    st.success(f"✅ 6/6 Cinematic Assets Ready!")
-
-def generate_ai_script(topic):
-    st.info("🧠 AI is directing...")
-    style = "suspenseful, fast-paced, documentary style"
-    prompt = f"Write a 120 word viral YouTube script about '{topic}'. Style: {style}. No scene descriptions, just the voiceover."
-    try:
-        txt = requests.get(f"https://text.pollinations.ai/{urllib.parse.quote(prompt)}").text
-        st.session_state.generated_script = txt
-        st.success("✅ Script Written!")
-        st.rerun() 
-    except: st.error("AI Script Failed")
-
-def get_audio_from_text(text_script):
-    st.write("🎙️ Recording Voice...")
-    # Using a deeper, more storytelling voice
-    voice = "en-US-ChristopherNeural" 
-    async def _save():
-        c = edge_tts.Communicate(text_script, voice)
-        await c.save(os.path.join(folder(), "voice.mp3"))
-    asyncio.run(_save())
-    st.success("✅ Audio Ready!")
-
-# --- THE MAGIC SAUCE: ZOOM EFFECT ---
-def zoom_in_effect(clip, zoom_ratio=0.04):
-    def effect(get_frame, t):
-        img = Image.fromarray(get_frame(t))
-        base_size = img.size
-        new_size = [
-            int(base_size[0] * (1 + (zoom_ratio * t))),
-            int(base_size[1] * (1 + (zoom_ratio * t)))
-        ]
-        # High-quality resize
-        img = img.resize(new_size, Image.LANCZOS)
-        
-        # Center Crop
-        x = (new_size[0] - base_size[0]) // 2
-        y = (new_size[1] - base_size[1]) // 2
-        img = img.crop([x, y, x + base_size[0], y + base_size[1]])
-        return np.array(img)
-    return clip.fl(effect)
-
-def render_video():
-    st.write("🎬 Rendering (Adding Motion & Effects)...")
-    p = folder()
-    try:
-        if not os.path.exists(os.path.join(p, "voice.mp3")): 
-            st.error("❌ No Audio! Record voice first.")
-            return
-        
-        vc = AudioFileClip(os.path.join(p, "voice.mp3"))
-        files = sorted([os.path.join(p, f) for f in os.listdir(p) if f.endswith(".jpg")])
-        
-        if len(files) == 0:
-            st.error("❌ No images found!")
-            return
-
-        # Calculate timing per image
-        dur = vc.duration / len(files)
-        clips = []
-        
-        # BUILD CLIPS WITH ANIMATION
-        for i, f in enumerate(files):
-            try:
-                # 1. Load Image
-                pil_img = Image.open(f).convert('RGB')
-                pil_img = pil_img.resize((1080, 1920), Image.LANCZOS)
-                
-                # 2. Create Clip
-                clip = ImageClip(np.array(pil_img)).set_duration(dur)
-                
-                # 3. APPLY "THE SHAKE" (Zoom Effect)
-                # Alternating zoom direction could be complex, so we stick to Zoom IN
-                # This makes it look alive!
-                clip = zoom_in_effect(clip, zoom_ratio=0.04) 
-                
-                clips.append(clip)
-            except Exception as e: 
-                print(f"Skipped bad frame: {e}")
-
-        if not clips:
-            st.error("Critical Render Error.")
-            return
-
-        # SAFE MUSIC (Dark/Cinematic)
-        final_audio = vc
-        try:
-            m_url = "https://ia800300.us.archive.org/17/items/TheSlenderManSong/Anxiety.mp3"
-            r = requests.get(m_url, timeout=3)
-            with open(os.path.join(p, "music.mp3"), "wb") as f: f.write(r.content)
-            mc = AudioFileClip(os.path.join(p, "music.mp3"))
+            # Backup Black Image with Text
+            img = Image.new('RGB', (1080, 1920), color=(15, 15, 20))
+            d = ImageDraw.Draw(img)
+            d.text((50, 900), f"Panel {i+1}\n{desc[:30]}...", fill=(255, 255, 255))
+            img.save(filepath)
             
-            # Loop music
-            if mc.duration < vc.duration: 
-                mc = afx.audio_loop(mc, duration=vc.duration)
-            else: 
-                mc = mc.subclip(0, vc.duration)
-                
-            # Lower music volume to 10% so voice is clear
-            final_audio = CompositeAudioClip([vc, mc.volumex(0.10)])
-        except: pass
+        generated_files.append(filepath)
+        my_bar.progress((i+1)/6)
+        
+    return generated_files
 
-        # FINAL RENDER
-        final = concatenate_videoclips(clips, method="compose").set_audio(final_audio)
-        output_path = os.path.join(p, "FINAL.mp4")
+# --- VIDEO RENDERER ---
+def render_video_from_storyboard():
+    st.write("🎬 Turning Storyboard into Video...")
+    p = folder()
+    
+    # 1. Generate Voiceover
+    text = f"This is the story of {st.session_state.topic}. " + " ".join(st.session_state.storyboard_text)
+    voice = "en-US-ChristopherNeural"
+    asyncio.run(edge_tts.Communicate(text[:500], voice).save(os.path.join(p, "voice.mp3")))
+    
+    try:
+        vc = AudioFileClip(os.path.join(p, "voice.mp3"))
+        files = sorted([os.path.join(p, f) for f in os.listdir(p) if f.startswith("panel")])
         
-        # Ultrafast preset to prevent server timeout
-        final.write_videofile(output_path, fps=24, preset="ultrafast", codec="libx264")
+        if not files: return
         
-        st.balloons()
-        st.success("DONE! VIDEO IS READY.")
-        st.video(output_path)
+        clips = []
+        dur = vc.duration / len(files)
         
-        with open(output_path, "rb") as file:
-            st.download_button("📥 DOWNLOAD MOVIE", file, "DarkVideo.mp4", "video/mp4")
+        for f in files:
+            pil_img = Image.open(f).convert('RGB').resize((1080, 1920), Image.LANCZOS)
+            clips.append(ImageClip(np.array(pil_img)).set_duration(dur))
+            
+        final = concatenate_videoclips(clips, method="compose").set_audio(vc)
+        final.write_videofile(os.path.join(p, "FINAL.mp4"), fps=24, preset="ultrafast")
         
-    except Exception as e: st.error(f"Render Failed: {e}")
+        st.video(os.path.join(p, "FINAL.mp4"))
+        with open(os.path.join(p, "FINAL.mp4"), "rb") as f:
+            st.download_button("📥 DOWNLOAD VIDEO", f, "Story.mp4")
+            
+    except Exception as e: st.error(f"Render Error: {e}")
 
 # --- UI LAYOUT ---
-st.title("🎥 Dark Studio: Cinematic Mode")
-st.caption("Auto-Motion Engine Active")
+st.title("🤖 Google AI Storyboarder")
 
-topic = st.text_input("Topic:", "The Mystery of the Ocean")
+# Sidebar for API Key
+with st.sidebar:
+    st.header("🔑 Settings")
+    google_key = st.text_input("Google API Key:", type="password")
+    st.caption("Get key from: aistudio.google.com")
 
-col1, col2 = st.columns(2)
+st.header("1. The Concept")
+topic = st.text_input("What is the story about?", "The lonely robot on Mars")
+st.session_state.topic = topic
 
-if col1.button("1. Gather Assets"):
-    get_images(topic)
-
-if col2.button("2. Write Script"):
-    generate_ai_script(topic)
-
-st.subheader("Script Editor")
-script_text = st.text_area("Review Script:", value=st.session_state.generated_script, height=150)
-
-if st.button("3. Record Voice"):
-    if len(script_text) < 5:
-        st.error("Script is empty!")
+if st.button("🚀 Create Storyboard"):
+    if len(google_key) < 10:
+        st.error("Please enter your Google API Key first!")
     else:
-        get_audio_from_text(script_text)
+        # 1. Ask Google to write the scenes
+        scenes = run_google_director(google_key, topic)
+        st.session_state.storyboard_text = scenes
+        
+        # 2. Generate the Images
+        files = generate_storyboard_images(scenes)
+        st.session_state.storyboard_images = files
+        st.success("Storyboard Created!")
 
-st.write("---")
-st.caption("Status Check:")
-img_count = len([f for f in os.listdir(folder()) if f.endswith(".jpg")])
-st.write(f"🖼️ Images: {img_count}/6 | 🔊 Audio: {'Ready' if os.path.exists(os.path.join(folder(), 'voice.mp3')) else 'Not Ready'}")
+# DISPLAY THE STORYBOARD (Grid View)
+if "storyboard_images" in st.session_state:
+    st.header("2. The Visual Plan")
+    
+    # Display in columns of 3
+    col1, col2, col3 = st.columns(3)
+    cols = [col1, col2, col3]
+    
+    for i, img_path in enumerate(st.session_state.storyboard_images):
+        text = st.session_state.storyboard_text[i]
+        with cols[i % 3]:
+            st.image(img_path, caption=f"Panel {i+1}", use_container_width=True)
+            st.caption(f"*{text[:60]}...*")
 
-if st.button("🔴 RENDER CINEMATIC VIDEO", type="primary"):
-    render_video()
-
-st.success("✅ SYSTEM READY")
+    st.header("3. Production")
+    if st.button("🎥 Render Final Video"):
+        render_video_from_storyboard()
