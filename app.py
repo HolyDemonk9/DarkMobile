@@ -202,4 +202,22 @@ if col1.button("Generate Scenes (Force 5)"):
     get_images(topic)
 
 if col2.button("✨ WRITE SCRIPT"):
-    generate_ai_script
+    generate_ai_script(topic)
+
+# SCRIPT EDITOR
+st.subheader("Script Editor")
+script_text = st.text_area("Review Script:", value=st.session_state.generated_script, height=150)
+
+if st.button("🎙️ Record Voice"):
+    if len(script_text) < 5:
+        st.error("Script is empty!")
+    else:
+        get_audio_from_text(script_text)
+
+# 3. PRODUCTION
+st.header("3. Production")
+img_count = len([f for f in os.listdir(folder()) if f.endswith(".jpg")])
+st.caption(f"Status: {img_count} Images Ready")
+
+if st.button("RENDER VIDEO", type="primary"):
+    render_video()
