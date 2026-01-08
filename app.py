@@ -13,7 +13,7 @@ import urllib.parse
 # COMPATIBILITY
 if not hasattr(Image, 'ANTIALIAS'): Image.ANTIALIAS = Image.LANCZOS
 
-st.set_page_config(page_title="Dark Studio: Logic", layout="wide", page_icon="🧠")
+st.set_page_config(page_title="Dark Studio: Final", layout="wide", page_icon="💎")
 
 # FOLDER SETUP
 if "project_path" not in st.session_state:
@@ -24,11 +24,10 @@ if "project_path" not in st.session_state:
 
 def folder(): return st.session_state.project_path
 
-# --- 1. THE LOGIC DIRECTOR ---
+# --- 1. LOGIC DIRECTOR ---
 def run_logic_director(topic, n_scenes, is_short):
     st.info(f"🧠 Constructing Pro Script for '{topic}'...")
     
-    # VISUAL TEMPLATES
     visual_styles = [
         "Cinematic wide shot, establishing shot of {t}, golden hour lighting, 8k, hyper-realistic",
         "Macro close-up detail of {t}, intricate textures, depth of field, volumetric lighting, unreal engine 5",
@@ -38,7 +37,6 @@ def run_logic_director(topic, n_scenes, is_short):
         "Abstract artistic representation of {t}, double exposure, dreamlike, surreal concept art"
     ]
     
-    # AUDIO TEMPLATES
     audio_intros = [
         "The story of {t} is one of the world's greatest mysteries.",
         "Few people truly understand the power and history of {t}.",
@@ -77,7 +75,7 @@ def run_logic_director(topic, n_scenes, is_short):
         
     return script_data
 
-# --- 2. THE ARTIST (Flux) ---
+# --- 2. ARTIST ---
 def generate_pro_images(script_data, is_short):
     st.write("🎨 Generating Professional Assets (Flux Engine)...")
     my_bar = st.progress(0)
@@ -109,7 +107,7 @@ def generate_pro_images(script_data, is_short):
         
     return script_data
 
-# --- 3. RENDER ENGINE ---
+# --- 3. RENDERER ---
 def zoom_in_effect(clip, zoom_ratio=0.04):
     def effect(get_frame, t):
         img = Image.fromarray(get_frame(t))
@@ -129,7 +127,6 @@ def render_video(project_data, is_short):
     st.write("⚙️ Rendering Final Video...")
     p = folder()
     
-    # Voiceover
     full_text = " ".join([s['audio'] for s in project_data])
     voice_path = os.path.join(p, "voice.mp3")
     asyncio.run(edge_tts.Communicate(full_text, "en-US-ChristopherNeural").save(voice_path))
@@ -149,14 +146,12 @@ def render_video(project_data, is_short):
             clips.append(clip)
         except: pass
         
-    # Music
     try:
         m_path = os.path.join(p, "music.mp3")
         if not os.path.exists(m_path):
             u = "https://ia800300.us.archive.org/17/items/TheSlenderManSong/Anxiety.mp3"
             r = requests.get(u, timeout=5)
             with open(m_path, "wb") as f: f.write(r.content)
-            
         music = AudioFileClip(m_path)
         if music.duration < vc.duration: music = afx.audio_loop(music, duration=vc.duration)
         else: music = music.subclip(0, vc.duration)
@@ -164,12 +159,12 @@ def render_video(project_data, is_short):
     except: final_audio = vc
 
     final = concatenate_videoclips(clips, method="compose").set_audio(final_audio)
-    output_path = os.path.join(p, "LOGIC_MOVIE.mp4")
+    output_path = os.path.join(p, "FINAL_MOVIE.mp4")
     final.write_videofile(output_path, fps=24, preset="ultrafast", codec="libx264")
     return output_path
 
 # --- UI ---
-st.title("🧠 Dark Studio: Logic Edition")
+st.title("💎 Dark Studio: Final")
 
 with st.sidebar:
     st.header("Settings")
@@ -198,21 +193,16 @@ if "project_data" in st.session_state:
                     with open(scene["image_path"], "wb") as f: f.write(up.getbuffer())
                     st.rerun()
             with c2:
-                # --- THIS IS THE RESTORED SECTION ---
-                st.subheader("🛠️ Manual Tools")
-                st.code(scene['visual'])
+                # --- UPDATED MANUAL TOOLS ---
+                st.caption("Step 1: Click the 'Copy' icon in the box below.")
+                st.code(scene['visual'], language="text")
                 
-                # Links for manual generation
-                q_safe = urllib.parse.quote(scene['visual'])
-                q_type = "Vertical Wallpaper" if st.session_state.get("is_short", True) else "Wide Wallpaper"
-                q_google = urllib.parse.quote(scene['visual'] + " " + q_type)
+                st.caption("Step 2: Click the link below, then Paste.")
+                st.markdown(f"[**👉 Open Google Gemini**](https://gemini.google.com/app)")
                 
-                st.markdown(f"""
-                1. [**Open Google Gemini** (Paste the code above)](https://gemini.google.com/app)
-                2. [**Search Google Images**]({f"https://www.google.com/search?q={q_google}&tbm=isch"})
-                """)
-                # ------------------------------------
-
+                st.caption("Step 3: Download the image and upload it on the left.")
+                # -----------------------------
+                
                 new_text = st.text_area("Audio:", value=scene['audio'], key=f"txt_{i}")
                 st.session_state.project_data[i]['audio'] = new_text
 
