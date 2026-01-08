@@ -12,13 +12,12 @@ import re
 from duckduckgo_search import DDGS
 
 # --- 1. CRITICAL PATCHES ---
-# Fixes the "Pink Screen" crash on cloud servers
 if not hasattr(Image, 'ANTIALIAS'):
     Image.ANTIALIAS = Image.LANCZOS
 if not hasattr(Image, 'BILINEAR'):
     Image.BILINEAR = Image.BICUBIC
 
-st.set_page_config(page_title="Dark Studio: Stock Hunter", layout="wide", page_icon="📸")
+st.set_page_config(page_title="Dark Studio: Director", layout="wide", page_icon="🎬")
 
 # FOLDER SETUP
 if "project_path" not in st.session_state:
@@ -32,67 +31,54 @@ def folder(): return st.session_state.project_path
 
 # --- 2. SCRIPT PARSER ---
 def parse_script_by_sentences(raw_text):
-    # Split text by punctuation (. ! ?) to make scenes
     sentences = re.split(r'(?<=[.!?])\s+', raw_text)
     script_data = []
     for s in sentences:
         clean_s = s.strip()
         if len(clean_s) > 5:
+            # Default the prompt to be the same as the audio, but user can change it later
             script_data.append({
                 "search_term": clean_s, 
-                "audio": clean_s
+                "audio": clean_s,
+                "image_path": None
             })
     return script_data
 
 # --- 3. STOCK IMAGE HUNTER ---
 def find_stock_images(script_data, is_short):
-    st.write(f"📸 Hunting for Stock Photos (Unsplash/Pexels)...")
+    st.write(f"📸 Hunting for Stock Photos...")
     prog_bar = st.progress(0)
-    
-    # Initialize Search Engine
     ddgs = DDGS()
     
-    # Dimensions (High Res)
     width, height = (720, 1280) if is_short else (1280, 720)
     
     for i, scene in enumerate(script_data):
         filename = f"scene_{i+1}.jpg"
         filepath = os.path.join(folder(), filename)
         
-        # KEY CHANGE: We force the search to look at Stock Sites
-        # We strip common words to get the "Core Subject" (e.g. "The Ocean" -> "Ocean")
-        core_subject = scene['search_term'].replace("The", "").replace(" is ", " ").replace(" a ", " ")
+        # USE THE MANUAL PROMPT PROVIDED BY USER
+        user_prompt = scene['search_term']
         
-        # We search specifically on Unsplash or Pexels for high quality
+        # Force high quality stock sites
         site = random.choice(["site:unsplash.com", "site:pexels.com"])
-        query = f"{core_subject} {site}"
+        query = f"{user_prompt} {site}"
         
         found = False
         try:
-            # Search for real images
-            # We fetch 10 results to increase odds of finding a valid downloadable one
-            results = list(ddgs.images(query, max_results=10))
-            
+            results = list(ddgs.images(query, max_results=5))
             for res in results:
                 try:
-                    img_url = res['image']
-                    # Try to download
-                    r = requests.get(img_url, timeout=5)
+                    r = requests.get(res['image'], timeout=5)
                     if r.status_code == 200:
                         with open(filepath, "wb") as f: f.write(r.content)
-                        # Verify it's a real image and not a broken file
-                        with Image.open(filepath) as check:
-                            check.verify()
+                        with Image.open(filepath) as check: check.verify()
                         found = True
-                        break # Stop looking if we found one
-                except:
-                    continue
-                    
-        except Exception as e:
-            print(f"Stock search failed: {e}")
+                        break
+                except: continue
+        except: pass
 
-        # Fallback: Create Black Placeholder if search fails
         if not found:
+            # Fallback
             Image.new('RGB', (width, height), (20, 20, 30)).save(filepath)
 
         script_data[i]["image_path"] = filepath
@@ -117,7 +103,6 @@ def render_video(project_data, is_short):
         vc = AudioFileClip(voice_path)
         clip_dur = vc.duration / len(project_data)
         
-        # Resolution (480p Safe Mode to prevent crash)
         target_size = (480, 854) if is_short else (854, 480)
         
         clips = []
@@ -126,8 +111,7 @@ def render_video(project_data, is_short):
                 img = Image.open(scene['image_path']).convert('RGB')
                 img = img.resize(target_size, Image.LANCZOS)
                 clips.append(ImageClip(np.array(img)).set_duration(clip_dur))
-            except:
-                pass # Skip broken images
+            except: pass
             
         final = concatenate_videoclips(clips, method="compose").set_audio(vc)
         output_path = os.path.join(p, "FINAL.mp4")
@@ -138,64 +122,86 @@ def render_video(project_data, is_short):
 
     except Exception as e:
         st.error(f"Render Error: {e}")
-        st.code(traceback.format_exc())
         return None
 
-# --- UI ---
-st.title("📸 Dark Studio: Stock Hunter")
+# --- UI LOGIC ---
+st.title("🎬 Dark Studio: Director Mode")
+
+if "step" not in st.session_state: st.session_state.step = 1
 
 with st.sidebar:
     st.header("Settings")
     format_choice = st.radio("Format:", ["📱 Shorts (9:16)", "🖥️ Video (16:9)"])
     is_short = "Short" in format_choice
+    st.info("Step 1: Write Script\nStep 2: Define Visuals\nStep 3: Generate")
+
+# --- STEP 1: SCRIPT ---
+if st.session_state.step == 1:
+    st.header("Step 1: The Script")
+    raw_script = st.text_area("Paste your story:", height=200, placeholder="The ocean is deep. Creatures swim in the dark.")
     
-    st.info("💡 **Source:** This version searches Unsplash.com and Pexels.com for professional stock photography.")
+    if st.button("NEXT: PLAN VISUALS ➡️", type="primary"):
+        if len(raw_script) > 5:
+            st.session_state.project_data = parse_script_by_sentences(raw_script)
+            st.session_state.is_short = is_short
+            st.session_state.step = 2
+            st.rerun()
+        else:
+            st.error("Script is too short!")
 
-# INPUT
-raw_script = st.text_area("Paste your script here:", height=200, 
-                          placeholder="The ocean is deep and mysterious. Giant whales swim in the blue water. Coral reefs are full of life.")
+# --- STEP 2: PROMPTING ---
+elif st.session_state.step == 2:
+    st.header("Step 2: The Visuals")
+    st.info("Describe what image you want for each sentence. Be specific!")
+    
+    # Create a form so we can edit all prompts at once
+    with st.form("prompt_form"):
+        updated_data = []
+        for i, scene in enumerate(st.session_state.project_data):
+            st.subheader(f"Scene {i+1}")
+            st.caption(f"🗣️ Audio: \"{scene['audio']}\"")
+            
+            # Here is where you type your manual prompt
+            new_prompt = st.text_input(f"Visual Prompt for Scene {i+1}:", value=scene['search_term'], key=f"p_{i}")
+            
+            scene['search_term'] = new_prompt
+            updated_data.append(scene)
+            st.divider()
+            
+        if st.form_submit_button("🚀 LAUNCH PRODUCTION"):
+            st.session_state.project_data = updated_data
+            # Run the search now
+            final_data = find_stock_images(st.session_state.project_data, st.session_state.is_short)
+            st.session_state.project_data = final_data
+            st.session_state.step = 3
+            st.rerun()
 
-if st.button("🚀 FIND STOCK PHOTOS", type="primary"):
-    if len(raw_script) < 5:
-        st.error("Please write a script!")
-    else:
-        # 1. Parse
-        data = parse_script_by_sentences(raw_script)
-        st.success(f"Split into {len(data)} scenes.")
-        
-        # 2. Find Stock Images
-        final_data = find_stock_images(data, is_short)
-        
-        st.session_state.project_data = final_data
-        st.session_state.is_short = is_short
+# --- STEP 3: REVIEW & RENDER ---
+elif st.session_state.step == 3:
+    st.header("Step 3: Final Review")
+    
+    if st.button("⬅️ Back to Script"):
+        st.session_state.step = 1
         st.rerun()
-
-# EDITOR
-if "project_data" in st.session_state:
-    st.divider()
-    st.header("🎞️ Timeline Review")
     
     for i, scene in enumerate(st.session_state.project_data):
-        with st.expander(f"Scene {i+1}: \"{scene['audio'][:40]}...\"", expanded=True):
+        with st.expander(f"Scene {i+1}", expanded=True):
             c1, c2 = st.columns([1, 2])
             with c1:
-                if os.path.exists(scene["image_path"]):
-                    # SAFE LOAD to prevent pink screen
+                if scene["image_path"] and os.path.exists(scene["image_path"]):
                     st.image(scene["image_path"])
-                
-                # Upload Manual Replacement
-                up = st.file_uploader(f"Replace Image {i+1}", type=['jpg','png'], key=f"up_{i}")
+                up = st.file_uploader(f"Replace {i+1}", type=['jpg','png'], key=f"up_{i}")
                 if up:
                     with open(scene["image_path"], "wb") as f: f.write(up.getbuffer())
                     st.rerun()
             with c2:
-                st.info(f"🗣️ **Voice:** {scene['audio']}")
-                st.caption(f"🔍 **Search Query:** {scene['search_term']}")
+                st.info(f"🗣️ {scene['audio']}")
+                st.caption(f"🔍 Used Prompt: {scene['search_term']}")
 
     st.divider()
-    if st.button("🔴 RENDER FINAL VIDEO", type="primary"):
-        vid_path = render_video(st.session_state.project_data, st.session_state.get("is_short", True))
+    if st.button("🔴 RENDER VIDEO", type="primary"):
+        vid_path = render_video(st.session_state.project_data, st.session_state.is_short)
         if vid_path:
             st.video(vid_path)
             with open(vid_path, "rb") as f:
-                st.download_button("📥 DOWNLOAD VIDEO", f, "Stock_Video.mp4")
+                st.download_button("📥 DOWNLOAD", f, "Director_Cut.mp4")
