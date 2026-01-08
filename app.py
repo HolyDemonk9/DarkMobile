@@ -33,7 +33,8 @@ def run_google_director(api_key, topic):
     st.info("🤖 Google Gemini is directing the scene...")
     try:
         genai.configure(api_key=api_key)
-        # SWITCHED TO 'gemini-pro' (The Universal Model)
+        
+        # FIXED: Correct Model Name (With Dash)
         model = genai.GenerativeModel('gemini-pro')
         
         prompt = (f"Act as a darker, cinematic film director. Create a 6-panel storyboard for a video about '{topic}'. "
