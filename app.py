@@ -6,16 +6,17 @@ import time
 import urllib.parse
 import random
 import numpy as np
-from PIL import Image, ImageDraw, ImageFont
-from moviepy.editor import AudioFileClip, ImageClip, concatenate_videoclips, CompositeAudioClip, afx
+from PIL import Image, ImageDraw
+from moviepy.editor import AudioFileClip, ImageClip, concatenate_videoclips, CompositeAudioClip
 import asyncio
 import edge_tts
 import shutil
+from duckduckgo_search import DDGS
 
 # COMPATIBILITY
 if not hasattr(Image, 'ANTIALIAS'): Image.ANTIALIAS = Image.LANCZOS
 
-st.set_page_config(page_title="Google AI Storyboard", layout="wide", page_icon="🤖")
+st.set_page_config(page_title="Story Robot: Instant Mode", layout="wide", page_icon="⚡")
 
 # FOLDER SETUP
 if "project_path" not in st.session_state:
@@ -28,64 +29,68 @@ if "storyboard_text" not in st.session_state: st.session_state.storyboard_text =
 
 def folder(): return st.session_state.project_path
 
-# --- GOOGLE GEMINI ROBOT ---
+# --- 1. THE DIRECTOR (Google Gemini) ---
 def run_google_director(api_key, topic):
-    st.info("🤖 Google Gemini is directing the scene...")
+    st.info("🧠 Gemini is writing the story...")
     try:
         genai.configure(api_key=api_key)
-        
-        # FIXED: Correct Model Name (With Dash)
         model = genai.GenerativeModel('gemini-pro')
         
-        prompt = (f"Act as a darker, cinematic film director. Create a 6-panel storyboard for a video about '{topic}'. "
-                  f"For each panel, provide a vivid, highly detailed visual description suitable for image generation. "
-                  f"Format: Panel 1: [Description] | Panel 2: [Description]...")
+        prompt = (f"Write a 6-sentence dark, cinematic story about '{topic}'. "
+                  f"Format as a list of 6 distinct visual sentences.")
         
         response = model.generate_content(prompt)
         text = response.text
         
-        # Parse the response
-        scenes = []
-        for line in text.split('\n'):
-            if "Panel" in line and ":" in line:
-                desc = line.split(":", 1)[1].strip()
-                scenes.append(desc)
-        
-        if len(scenes) < 6:
-            scenes = [f"A cinematic shot of {topic}, scene {i+1}" for i in range(6)]
-            
+        # Clean up text
+        scenes = [line.strip().replace("*", "") for line in text.split('\n') if len(line) > 10]
         return scenes[:6]
     except Exception as e:
-        st.error(f"Google AI Error: {e}")
-        # Fallback if Google fails
-        return [f"A cinematic shot of {topic}, scene {i+1}" for i in range(6)]
+        st.error(f"Gemini Error: {e}")
+        return [f"The mystery of {topic} begins now.", f"Deep in the shadows, something moves.", 
+                f"The world changed forever.", f"Nobody expected what happened next.",
+                f"The truth was hidden in plain sight.", f"This is the end of the beginning."]
 
-# --- IMAGE GENERATOR ---
-def generate_storyboard_images(scenes):
-    st.write("🎨 Painting Storyboard...")
+# --- 2. THE ARTIST (DuckDuckGo Search) ---
+def find_cinematic_images(scenes):
+    st.write("⚡ Finding Cinematic Assets (No Keys, No Lag)...")
     generated_files = []
-    
     my_bar = st.progress(0)
+    ddgs = DDGS()
     
     for i, desc in enumerate(scenes):
         filename = f"panel_{i+1}.jpg"
         filepath = os.path.join(folder(), filename)
         
-        # Use Gemini's description for the search
-        search_prompt = urllib.parse.quote(desc[:100] + " cinematic lighting 8k")
-        u = f"https://image.pollinations.ai/prompt/{search_prompt}?width=1080&height=1920&nologo=true&seed={random.randint(0,999)}"
+        # The Search Query: We ask for "Concept Art" to match the AI vibe
+        keywords = f"cinematic concept art {desc[:20]} vertical wallpaper 4k dark moody"
         
+        found = False
         try:
-            r = requests.get(u, timeout=6)
-            if r.status_code == 200:
-                with open(filepath, "wb") as f: f.write(r.content)
-            else:
-                raise Exception("Download failed")
-        except:
-            # Backup Black Image
-            img = Image.new('RGB', (1080, 1920), color=(15, 15, 20))
+            # Search for images
+            results = list(ddgs.images(keywords, max_results=5))
+            if results:
+                # Try to download the first valid image
+                for res in results:
+                    img_url = res['image']
+                    try:
+                        r = requests.get(img_url, timeout=3)
+                        if r.status_code == 200:
+                            with open(filepath, "wb") as f: f.write(r.content)
+                            # Verify it's a real image
+                            try: 
+                                Image.open(filepath).verify()
+                                found = True
+                                break
+                            except: pass
+                    except: pass
+        except: pass
+        
+        # Backup if search fails: Create a Text Card
+        if not found:
+            img = Image.new('RGB', (1080, 1920), color=(10, 10, 20))
             d = ImageDraw.Draw(img)
-            d.text((50, 900), f"Panel {i+1}\n{desc[:30]}...", fill=(255, 255, 255))
+            d.text((100, 800), f"SCENE {i+1}", fill=(255, 255, 255))
             img.save(filepath)
             
         generated_files.append(filepath)
@@ -93,31 +98,41 @@ def generate_storyboard_images(scenes):
         
     return generated_files
 
-# --- VIDEO RENDERER ---
-def render_video_from_storyboard():
-    st.write("🎬 Turning Storyboard into Video...")
+# --- 3. THE EDITOR (Video Render) ---
+def render_video():
+    st.write("🎬 Assembling Video...")
     p = folder()
     
-    if not st.session_state.storyboard_text:
-        st.error("No story found! Generate Storyboard first.")
-        return
-
-    # Generate Voiceover
-    text = f"This is the story of {st.session_state.get('topic', 'us')}. " + " ".join(st.session_state.storyboard_text)
-    voice = "en-US-ChristopherNeural"
-    asyncio.run(edge_tts.Communicate(text[:500], voice).save(os.path.join(p, "voice.mp3")))
+    # Voiceover
+    full_text = " ".join(st.session_state.storyboard_text)
+    asyncio.run(edge_tts.Communicate(full_text, "en-US-ChristopherNeural").save(os.path.join(p, "voice.mp3")))
     
     try:
         vc = AudioFileClip(os.path.join(p, "voice.mp3"))
-        files = sorted([os.path.join(p, f) for f in os.listdir(p) if f.startswith("panel")])
-        
-        if not files: return
+        files = st.session_state.storyboard_images
         
         clips = []
         dur = max(vc.duration / len(files), 2)
         
         for f in files:
-            pil_img = Image.open(f).convert('RGB').resize((1080, 1920), Image.LANCZOS)
+            # Resize image to fit screen
+            pil_img = Image.open(f).convert('RGB')
+            # Crop to center 9:16
+            width, height = pil_img.size
+            target_ratio = 1080/1920
+            
+            if width/height > target_ratio:
+                # Too wide, crop width
+                new_width = int(height * target_ratio)
+                left = (width - new_width) // 2
+                pil_img = pil_img.crop((left, 0, left + new_width, height))
+            else:
+                # Too tall, crop height
+                new_height = int(width / target_ratio)
+                top = (height - new_height) // 2
+                pil_img = pil_img.crop((0, top, width, top + new_height))
+                
+            pil_img = pil_img.resize((1080, 1920), Image.LANCZOS)
             clips.append(ImageClip(np.array(pil_img)).set_duration(dur))
             
         final = concatenate_videoclips(clips, method="compose").set_audio(vc)
@@ -129,42 +144,33 @@ def render_video_from_storyboard():
             
     except Exception as e: st.error(f"Render Error: {e}")
 
-# --- UI LAYOUT ---
-st.title("🤖 Google AI Storyboarder")
+# --- UI ---
+st.title("⚡ Instant Story Robot")
+st.caption("Using Search Engine Assets (No Keys Required for Images)")
 
 with st.sidebar:
-    st.header("🔑 Settings")
-    google_key = st.text_input("Google API Key:", type="password")
-    st.caption("Get key from: aistudio.google.com")
+    google_key = st.text_input("Google API Key (For Script):", type="password")
 
-st.header("1. The Concept")
-topic = st.text_input("What is the story about?", "The lonely robot on Mars")
-st.session_state.topic = topic
+topic = st.text_input("Topic:", "The Mystery of the Deep Ocean")
 
-if st.button("🚀 Create Storyboard"):
-    if len(google_key) < 10:
-        st.error("Please enter your Google API Key first!")
+if st.button("🚀 GO!"):
+    if len(google_key) < 5:
+        st.error("Please enter Google Key for the script!")
     else:
+        # 1. Script
         scenes = run_google_director(google_key, topic)
         st.session_state.storyboard_text = scenes
+        st.success("Script Written!")
         
-        files = generate_storyboard_images(scenes)
+        # 2. Images (Search)
+        files = find_cinematic_images(scenes)
         st.session_state.storyboard_images = files
-        st.success("Storyboard Created!")
-
-# DISPLAY THE STORYBOARD
-if "storyboard_images" in st.session_state:
-    st.header("2. The Visual Plan")
-    
-    col1, col2, col3 = st.columns(3)
-    cols = [col1, col2, col3]
-    
-    for i, img_path in enumerate(st.session_state.storyboard_images):
-        text = st.session_state.storyboard_text[i]
-        with cols[i % 3]:
-            st.image(img_path, caption=f"Panel {i+1}", use_container_width=True)
-            st.caption(f"*{text[:60]}...*")
-
-    st.header("3. Production")
-    if st.button("🎥 Render Final Video"):
-        render_video_from_storyboard()
+        
+        # Show Preview
+        cols = st.columns(3)
+        for i, f in enumerate(files):
+            with cols[i%3]:
+                st.image(f, caption=f"Scene {i+1}")
+        
+        # 3. Render Button
+        st.button("🎥 RENDER FINAL VIDEO", on_click=render_video)
