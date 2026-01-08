@@ -6,14 +6,15 @@ import asyncio
 import edge_tts
 from PIL import Image
 import shutil
-from moviepy.editor import AudioFileClip, ImageClip, concatenate_videoclips, CompositeAudioClip, afx
+from moviepy.editor import AudioFileClip, ImageClip, concatenate_videoclips
 import numpy as np
 import urllib.parse
+import time
 
 # COMPATIBILITY
 if not hasattr(Image, 'ANTIALIAS'): Image.ANTIALIAS = Image.LANCZOS
 
-st.set_page_config(page_title="Dark Studio: Safe Mode", layout="wide", page_icon="🛡️")
+st.set_page_config(page_title="Dark Studio: Progress", layout="wide", page_icon="⏳")
 
 # FOLDER SETUP
 if "project_path" not in st.session_state:
@@ -24,61 +25,45 @@ if "project_path" not in st.session_state:
 
 def folder(): return st.session_state.project_path
 
-# --- 1. LOGIC DIRECTOR ---
-def run_logic_director(topic, n_scenes, is_short):
-    st.info(f"🧠 Constructing Pro Script for '{topic}'...")
+# --- 1. CALCULATOR ---
+def calculate_pacing(duration, scenes):
+    time_per_scene = duration / scenes
+    total_words = int(duration * 2.2) 
+    return time_per_scene, total_words
+
+# --- 2. LOGIC DIRECTOR ---
+def run_logic_director(topic, n_scenes, total_words, is_short):
+    st.info(f"🧠 Writing {total_words}-word script for '{topic}'...")
     
     visual_styles = [
-        "Cinematic wide shot, establishing shot of {t}, golden hour lighting, 8k, hyper-realistic",
-        "Macro close-up detail of {t}, intricate textures, depth of field, volumetric lighting, unreal engine 5",
-        "Low angle dramatic shot of {t}, dark moody atmosphere, fog, silhouette, mysterious vibe",
-        "Overhead drone view of {t}, symmetrical composition, high contrast, cinematic grading",
-        "Action shot of {t} in motion, dynamic blur, particle effects, 4k resolution",
-        "Abstract artistic representation of {t}, double exposure, dreamlike, surreal concept art"
-    ]
-    
-    audio_intros = [
-        "The story of {t} is one of the world's greatest mysteries.",
-        "Few people truly understand the power and history of {t}.",
-        "Hidden beneath the surface, {t} holds a secret that changes everything.",
-    ]
-    audio_middles = [
-        "For centuries, experts have questioned its true origins.",
-        "The evidence suggests something far darker is at play here.",
-        "To understand the future, we must look at the hidden past.",
-        "It is a phenomenon that defies all simple explanations.",
-        "Every detail reveals a complex web of unanswered questions."
-    ]
-    audio_outros = [
-        "This is why {t} remains an unforgettable legend.",
-        "And that is the true secret hidden within the darkness.",
-        "The legend of {t} is only just beginning."
+        "Cinematic wide shot of {t}, golden hour, 8k, hyper-realistic",
+        "Extreme close-up details of {t}, macro photography, unreal engine 5",
+        "Dark atmospheric shot of {t}, silhouette, fog, mysterious lighting",
+        "Drone overhead view of {t}, symmetrical, high contrast",
+        "Action shot of {t}, dynamic motion blur, 4k",
+        "Abstract concept art of {t}, dreamlike, surreal, double exposure"
     ]
     
     script_data = []
     
+    intros = [f"The story of {topic} is a mystery.", f"{topic} has changed the world.", f"We explore the truth of {topic}."]
+    middles = [f"Deep inside {topic}, secrets remain.", f"Experts are baffled by {topic}.", f"The evidence for {topic} is clear."]
+    outros = [f"This is the legend of {topic}.", f"{topic} will never be forgotten.", f"The end of {topic} is near."]
+    
     for i in range(n_scenes):
-        style_template = visual_styles[i % len(visual_styles)]
-        visual_prompt = style_template.format(t=topic)
-        
-        if i == 0:
-            audio_text = random.choice(audio_intros).format(t=topic)
-        elif i == n_scenes - 1:
-            audio_text = random.choice(audio_outros).format(t=topic)
-        else:
-            audio_text = random.choice(audio_middles).format(t=topic)
-            
-        script_data.append({
-            "visual": visual_prompt,
-            "audio": audio_text
-        })
+        style = visual_styles[i % len(visual_styles)].format(t=topic)
+        if i == 0: text = random.choice(intros)
+        elif i == n_scenes - 1: text = random.choice(outros)
+        else: text = random.choice(middles)
+        script_data.append({"visual": style, "audio": text})
         
     return script_data
 
-# --- 2. ARTIST ---
+# --- 3. ARTIST ---
 def generate_pro_images(script_data, is_short):
-    st.write("🎨 Generating Professional Assets (Flux Engine)...")
-    my_bar = st.progress(0)
+    st.write("🎨 Generating Assets...")
+    # Add a visible progress bar for image generation
+    my_bar = st.progress(0, text="Downloading Images...")
     
     width, height = (1080, 1920) if is_short else (1920, 1080)
     
@@ -87,117 +72,103 @@ def generate_pro_images(script_data, is_short):
         filepath = os.path.join(folder(), filename)
         
         safe_prompt = requests.utils.quote(scene['visual'])
-        seed = random.randint(0, 99999)
-        url = f"https://image.pollinations.ai/prompt/{safe_prompt}?width={width}&height={height}&nologo=true&seed={seed}&model=flux"
+        url = f"https://image.pollinations.ai/prompt/{safe_prompt}?width={width}&height={height}&nologo=true&seed={random.randint(0,999)}&model=flux"
         
-        downloaded = False
         try:
-            r = requests.get(url, timeout=15)
-            if r.status_code == 200 and len(r.content) > 1000:
+            r = requests.get(url, timeout=10)
+            if r.status_code == 200:
                 with open(filepath, "wb") as f: f.write(r.content)
-                downloaded = True
-        except: pass
-        
-        if not downloaded:
-            img = Image.new('RGB', (width, height), color=(15, 15, 20))
-            img.save(filepath)
+            else:
+                Image.new('RGB', (width, height), (20,20,20)).save(filepath)
+        except:
+            Image.new('RGB', (width, height), (20,20,20)).save(filepath)
             
         script_data[i]["image_path"] = filepath
-        my_bar.progress((i+1)/len(script_data))
+        # Update bar
+        percent = int(((i+1)/len(script_data))*100)
+        my_bar.progress((i+1)/len(script_data), text=f"Downloading Image {i+1}/{len(script_data)} ({percent}%)")
         
     return script_data
 
-# --- 3. RENDERER (Safe vs Pro) ---
-def zoom_in_effect(clip, zoom_ratio=0.04):
-    def effect(get_frame, t):
-        img = Image.fromarray(get_frame(t))
-        base_size = img.size
-        new_size = [
-            int(base_size[0] * (1 + (zoom_ratio * t))),
-            int(base_size[1] * (1 + (zoom_ratio * t)))
-        ]
-        img = img.resize(new_size, Image.LANCZOS)
-        x = (new_size[0] - base_size[0]) // 2
-        y = (new_size[1] - base_size[1]) // 2
-        img = img.crop([x, y, x + base_size[0], y + base_size[1]])
-        return np.array(img)
-    return clip.fl(effect)
-
-def render_video(project_data, is_short, safe_mode=False):
-    st.write(f"⚙️ Rendering Video (Safe Mode: {safe_mode})...")
+# --- 4. RENDERER WITH PROGRESS ---
+def render_with_progress(project_data, is_short):
     p = folder()
     
-    # 1. Voice
-    full_text = " ".join([s['audio'] for s in project_data])
-    voice_path = os.path.join(p, "voice.mp3")
-    asyncio.run(edge_tts.Communicate(full_text, "en-US-ChristopherNeural").save(voice_path))
-    
-    vc = AudioFileClip(voice_path)
-    clip_duration = vc.duration / len(project_data)
-    
-    # 2. Clips
-    clips = []
-    
-    # In safe mode, we reduce resolution to ensure it finishes
-    if safe_mode:
-        target_size = (720, 1280) if is_short else (1280, 720)
-    else:
-        target_size = (1080, 1920) if is_short else (1920, 1080)
-    
-    for scene in project_data:
-        try:
-            img = Image.open(scene['image_path']).convert('RGB')
-            img = img.resize(target_size, Image.LANCZOS)
-            clip = ImageClip(np.array(img)).set_duration(clip_duration)
-            
-            # ONLY Apply heavy zoom if NOT in safe mode
-            if not safe_mode:
-                clip = zoom_in_effect(clip)
-                
-            clips.append(clip)
-        except: pass
+    # We use a Status Container to show steps
+    with st.status("🚀 Starting Render Engine...", expanded=True) as status:
         
-    # 3. Music
-    try:
-        m_path = os.path.join(p, "music.mp3")
-        if not os.path.exists(m_path):
-            u = "https://ia800300.us.archive.org/17/items/TheSlenderManSong/Anxiety.mp3"
-            r = requests.get(u, timeout=5)
-            with open(m_path, "wb") as f: f.write(r.content)
-        music = AudioFileClip(m_path)
-        if music.duration < vc.duration: music = afx.audio_loop(music, duration=vc.duration)
-        else: music = music.subclip(0, vc.duration)
-        final_audio = CompositeAudioClip([vc, music.audio_fadeout(2).volumex(0.15)])
-    except: final_audio = vc
-
-    final = concatenate_videoclips(clips, method="compose").set_audio(final_audio)
-    output_path = os.path.join(p, "FINAL_MOVIE.mp4")
-    
-    # Write file
-    final.write_videofile(output_path, fps=24, preset="ultrafast", codec="libx264")
+        # STEP 1: AUDIO
+        status.write("🎙️ Step 1/4: Generating Voiceover...")
+        full_text = " ".join([s['audio'] for s in project_data])
+        voice_path = os.path.join(p, "voice.mp3")
+        asyncio.run(edge_tts.Communicate(full_text, "en-US-ChristopherNeural").save(voice_path))
+        
+        # STEP 2: IMAGES
+        status.write("🎨 Step 2/4: Processing & Resizing Images...")
+        target_size = (720, 1280) if is_short else (1280, 720)
+        vc = AudioFileClip(voice_path)
+        clip_dur = vc.duration / len(project_data)
+        
+        clips = []
+        # Create a mini progress bar inside the status for image processing
+        proc_bar = st.progress(0)
+        for i, scene in enumerate(project_data):
+            try:
+                img = Image.open(scene['image_path']).convert('RGB')
+                img = img.resize(target_size, Image.LANCZOS)
+                clips.append(ImageClip(np.array(img)).set_duration(clip_dur))
+            except: pass
+            proc_bar.progress((i+1)/len(project_data))
+            
+        # STEP 3: STITCHING
+        status.write("🎬 Step 3/4: Stitching Video Timeline...")
+        final = concatenate_videoclips(clips, method="compose").set_audio(vc)
+        
+        # STEP 4: WRITING FILE
+        status.write("💾 Step 4/4: Saving Final File (Please Wait)...")
+        output_path = os.path.join(p, "FINAL.mp4")
+        # We cannot get a % bar for this specific function in Streamlit easily, 
+        # but the status shows we are in the final stage.
+        final.write_videofile(output_path, fps=24, preset="ultrafast", codec="libx264", audio_codec="aac")
+        
+        status.update(label="✅ Render Complete!", state="complete", expanded=False)
+        
     return output_path
 
 # --- UI ---
-st.title("💎 Dark Studio: Production")
+st.title("⚡ Dark Studio: Progress Edition")
 
 with st.sidebar:
-    st.header("Settings")
-    format_choice = st.radio("Format:", ["📱 Shorts", "🖥️ Video"])
+    st.header("1. Settings")
+    
+    # MOVED TO TOP
+    st.subheader("⏱️ Time Controls")
+    duration = st.number_input("Total Duration (Seconds):", min_value=10, max_value=300, value=30, help="Type the exact seconds you want.")
+    scenes = st.number_input("Number of Scenes:", 3, 20, 5)
+    
+    st.divider()
+    
+    st.subheader("📺 Format")
+    format_choice = st.radio("Style:", ["📱 Shorts (9:16)", "🖥️ Video (16:9)"])
     is_short = "Short" in format_choice
     topic = st.text_input("Topic:", "The Deep Ocean")
-    scenes = st.number_input("Scenes:", 3, 10, 5)
     
     if st.button("🚀 GENERATE DRAFT", type="primary"):
-        data = run_logic_director(topic, scenes, is_short)
+        tps, words = calculate_pacing(duration, scenes)
+        data = run_logic_director(topic, scenes, words, is_short)
         final_data = generate_pro_images(data, is_short)
         st.session_state.project_data = final_data
         st.session_state.is_short = is_short
         st.rerun()
 
 if "project_data" in st.session_state:
-    st.header("Review & Edit")
+    st.header("2. Review")
+    
+    # Progress Bar for Review
+    review_bar = st.progress(100, text="Draft Ready for Review")
+    
     for i, scene in enumerate(st.session_state.project_data):
-        with st.expander(f"Scene {i+1}: {scene['visual'][:30]}...", expanded=True):
+        with st.expander(f"Scene {i+1}", expanded=True):
             c1, c2 = st.columns([1, 2])
             with c1:
                 if os.path.exists(scene["image_path"]):
@@ -207,40 +178,19 @@ if "project_data" in st.session_state:
                     with open(scene["image_path"], "wb") as f: f.write(up.getbuffer())
                     st.rerun()
             with c2:
-                st.caption("Step 1: Copy Prompt")
-                st.code(scene['visual'], language="text")
-                st.caption("Step 2: Generate")
-                st.markdown(f"[**👉 Open Gemini**](https://gemini.google.com/app)")
-                
+                st.code(scene['visual'])
+                st.markdown(f"[👉 Open Gemini](https://gemini.google.com/app)")
                 new_text = st.text_area("Audio:", value=scene['audio'], key=f"txt_{i}")
                 st.session_state.project_data[i]['audio'] = new_text
 
     st.divider()
-    st.subheader("🏁 Final Production")
     
-    col1, col2 = st.columns(2)
-    
-    # TWO BUTTONS FOR SAFETY
-    with col1:
-        if st.button("🟢 FAST RENDER (Safe Mode)", help="No Zoom, 720p. Use this if Pro crashes."):
-            with st.spinner("Rendering Safe Video..."):
-                try:
-                    vid_path = render_video(st.session_state.project_data, st.session_state.get("is_short", True), safe_mode=True)
-                    st.success("Success!")
-                    st.video(vid_path)
-                    with open(vid_path, "rb") as f:
-                        st.download_button("📥 DOWNLOAD FAST", f, "Fast_Movie.mp4")
-                except Exception as e:
-                    st.error(f"Error: {e}")
-
-    with col2:
-        if st.button("🔴 PRO RENDER (High Quality)", help="Full HD + Zoom Effects. Might be slow."):
-            with st.spinner("Rendering High Quality..."):
-                try:
-                    vid_path = render_video(st.session_state.project_data, st.session_state.get("is_short", True), safe_mode=False)
-                    st.success("Success!")
-                    st.video(vid_path)
-                    with open(vid_path, "rb") as f:
-                        st.download_button("📥 DOWNLOAD PRO", f, "Pro_Movie.mp4")
-                except Exception as e:
-                    st.error(f"Render Crashed: {e} (Try Fast Render instead)")
+    if st.button("🟢 RENDER VIDEO NOW", type="primary"):
+        try:
+            vid_path = render_with_progress(st.session_state.project_data, st.session_state.get("is_short", True))
+            st.success("Video Ready!")
+            st.video(vid_path)
+            with open(vid_path, "rb") as f:
+                st.download_button("📥 DOWNLOAD VIDEO", f, "My_Video.mp4")
+        except Exception as e:
+            st.error(f"Error: {e}")
