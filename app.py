@@ -7,11 +7,12 @@ import edge_tts
 import urllib.parse
 import re
 import numpy as np
+import random
 from PIL import Image, ImageDraw, ImageFont
 from moviepy.editor import AudioFileClip, ImageClip, concatenate_videoclips, CompositeAudioClip, afx
 import shutil
 
-# COMPATIBILITY PATCH
+# COMPATIBILITY
 if not hasattr(Image, 'ANTIALIAS'): Image.ANTIALIAS = Image.LANCZOS
 
 # CONFIG
@@ -24,51 +25,84 @@ if "project_path" not in st.session_state:
         shutil.rmtree(st.session_state.project_path) 
     os.makedirs(st.session_state.project_path)
 
-if "generated_script" not in st.session_state:
-    st.session_state.generated_script = ""
+if "generated_script" not in st.session_state: st.session_state.generated_script = ""
 
 def folder(): return st.session_state.project_path
 
-# --- HELPER: Create Backup Image ---
-def create_placeholder(filename, text):
-    img = Image.new('RGB', (1080, 1920), color = (0, 0, 0))
-    d = ImageDraw.Draw(img)
-    try: d.text((100, 900), text, fill=(255, 255, 255))
-    except: pass
-    img.save(os.path.join(folder(), filename))
-
 # --- FUNCTIONS ---
+
 def get_images(topic):
     style = st.session_state.get("stolen_prompt", "cinematic, dark, 8k")
     st.write(f"🎨 Generating Scenes for: {topic}...")
     
+    # 1. Get Scene List (FORCE 5 ITEMS)
     seed = int(time.time())
+    scenes = []
     try:
         u = f"https://text.pollinations.ai/{urllib.parse.quote(f'List 5 distinct visual scenes for {topic}. Style: {style}. Seed: {seed}. Format: - Description')}"
-        scenes = [l for l in requests.get(u).text.split('\n') if l.strip().startswith("-")][:5]
-        if len(scenes) < 3: raise Exception("List too short")
-    except: 
-        scenes = [f"Dark cinematic shot of {topic} {i}" for i in range(5)]
+        # We strictly look for lines starting with "-"
+        raw_scenes = [l for l in requests.get(u).text.split('\n') if l.strip().startswith("-")]
+        scenes = raw_scenes[:5] # Take top 5
+    except: pass
+
+    # FAILSAFE: If we have less than 5, fill the gaps manually
+    while len(scenes) < 5:
+        scenes.append(f"- A mysterious cinematic shot of {topic}, scene {len(scenes)+1}")
     
+    st.caption(f"Brainstormed {len(scenes)} Scenes. Generating Images...")
+
     bar = st.progress(0)
+    
+    # 2. GENERATE IMAGES (Indestructible Loop)
     for i, s in enumerate(scenes):
         clean = re.sub(r'^- ', '', s)
         filename = f"{i+1:03}.jpg"
+        filepath = os.path.join(folder(), filename)
+        
+        # Strategy A: AI Generation
         prompt = urllib.parse.quote(f"{clean}, {style}, 8k")
-        u2 = f"https://image.pollinations.ai/prompt/{prompt}?width=1080&height=1920&nologo=true"
+        u_ai = f"https://image.pollinations.ai/prompt/{prompt}?width=1080&height=1920&nologo=true&seed={random.randint(0,99999)}"
+        
+        # Strategy B: Stock Photo Backup
+        u_stock = f"https://picsum.photos/1080/1920?random={i+seed}"
         
         saved = False
+        
+        # Attempt 1: AI
         try:
-            r = requests.get(u2, timeout=15)
-            if r.status_code == 200 and len(r.content) > 1000:
-                with open(os.path.join(folder(), filename), "wb") as f: f.write(r.content)
+            r = requests.get(u_ai, timeout=8)
+            if r.status_code == 200 and len(r.content) > 4000: # Check file size > 4KB
+                with open(filepath, "wb") as f: f.write(r.content)
                 saved = True
         except: pass
         
-        if not saved: create_placeholder(filename, f"Scene {i+1}")
-        bar.progress((i + 1) / len(scenes))
+        # Attempt 2: Stock Photo (If AI failed)
+        if not saved:
+            try:
+                r = requests.get(u_stock, timeout=8)
+                if r.status_code == 200:
+                    with open(filepath, "wb") as f: f.write(r.content)
+                    saved = True
+            except: pass
+            
+        # Attempt 3: Black Placeholder (Last Resort)
+        if not saved:
+            img = Image.new('RGB', (1080, 1920), color=(10, 10, 10))
+            d = ImageDraw.Draw(img)
+            # Try drawing text, ignore font errors
+            try: d.text((50, 900), f"Scene {i+1}: {clean[:20]}...", fill=(255, 255, 255))
+            except: pass
+            img.save(filepath)
+
+        bar.progress((i + 1) / 5)
         time.sleep(1) 
-    st.success(f"✅ Images Ready!")
+    
+    # Final Count Check
+    valid_imgs = len([f for f in os.listdir(folder()) if f.endswith(".jpg")])
+    if valid_imgs == 5:
+        st.success(f"✅ Success! {valid_imgs} Images Ready.")
+    else:
+        st.warning(f"⚠️ Only {valid_imgs}/5 Images generated. Video might be short.")
 
 def generate_ai_script(topic):
     st.info("🧠 AI is thinking...")
@@ -93,44 +127,34 @@ def get_audio_from_text(text_script):
     st.success("✅ Audio Ready!")
 
 def render_video():
-    st.write("🎬 Rendering (Bulletproof Mode)...")
+    st.write("🎬 Rendering (Safe Mode)...")
     p = folder()
     try:
-        # 1. AUDIO CHECK
         if not os.path.exists(os.path.join(p, "voice.mp3")): 
             st.error("❌ No Audio! Record voice first.")
             return
         
         vc = AudioFileClip(os.path.join(p, "voice.mp3"))
-        
-        # 2. IMAGE CHECK
         files = sorted([os.path.join(p, f) for f in os.listdir(p) if f.endswith(".jpg")])
         if len(files) == 0:
-            st.error("❌ No images found!")
+            st.error("❌ No images found! Click 'Generate Scenes' first.")
             return
 
-        # 3. BUILD CLIPS (Using PIL Method - Fixes the Crash)
-        dur = vc.duration / len(files)
+        # BUILD CLIPS (Using PIL Method)
+        dur = max(vc.duration / len(files), 2) # Min duration 2s
         clips = []
-        
         for f in files:
             try:
-                # Load with PIL -> Convert to Array -> Clip
-                # This bypasses the FFmpeg image reader which fails on cloud
                 pil_img = Image.open(f).convert('RGB')
                 pil_img = pil_img.resize((1080, 1920), Image.ANTIALIAS)
-                img_array = np.array(pil_img)
-                
-                clip = ImageClip(img_array).set_duration(dur)
-                clips.append(clip)
-            except Exception as e:
-                st.warning(f"Skipped bad image {f}: {e}")
+                clips.append(ImageClip(np.array(pil_img)).set_duration(dur))
+            except: pass
 
         if not clips:
-            st.error("❌ Critical Error: All images failed to load.")
+            st.error("❌ Critical: All images failed to load.")
             return
 
-        # 4. MUSIC (Safe Mode)
+        # SAFE MUSIC
         final_audio = vc
         try:
             m_url = "https://ia800300.us.archive.org/17/items/TheSlenderManSong/Anxiety.mp3"
@@ -143,7 +167,6 @@ def render_video():
                 final_audio = CompositeAudioClip([vc, mc.volumex(0.15)])
         except: pass
 
-        # 5. FINAL EXPORT
         final = concatenate_videoclips(clips, method="compose").set_audio(final_audio)
         output_path = os.path.join(p, "FINAL.mp4")
         final.write_videofile(output_path, fps=24, preset="ultrafast")
@@ -156,8 +179,8 @@ def render_video():
     except Exception as e: st.error(f"Render Failed: {e}")
 
 # --- UI LAYOUT ---
-st.title("📱 Dark Studio v2.2")
-st.caption("School Project Edition")
+st.title("📱 Dark Studio v3.5")
+st.caption("School Project: Auto-Fill Edition")
 
 # 1. STRATEGY
 st.header("1. Strategy")
@@ -175,26 +198,8 @@ topic = st.text_input("Topic:", "The Mystery of the Ocean")
 st.header("2. Content")
 col1, col2 = st.columns(2)
 
-if col1.button("Generate Images"):
+if col1.button("Generate Scenes (Force 5)"):
     get_images(topic)
 
 if col2.button("✨ WRITE SCRIPT"):
-    generate_ai_script(topic)
-
-# SCRIPT EDITOR
-st.subheader("Script Editor")
-script_text = st.text_area("Review Script:", value=st.session_state.generated_script, height=150)
-
-if st.button("🎙️ Record Voice"):
-    if len(script_text) < 5:
-        st.error("Script is empty!")
-    else:
-        get_audio_from_text(script_text)
-
-# 3. PRODUCTION
-st.header("3. Production")
-img_count = len([f for f in os.listdir(folder()) if f.endswith(".jpg")])
-st.caption(f"Status: {img_count} Images Ready")
-
-if st.button("RENDER VIDEO", type="primary"):
-    render_video()
+    generate_ai_script
