@@ -8,6 +8,7 @@ from PIL import Image
 import shutil
 from moviepy.editor import AudioFileClip, ImageClip, concatenate_videoclips, CompositeAudioClip, afx
 import numpy as np
+import urllib.parse
 
 # COMPATIBILITY
 if not hasattr(Image, 'ANTIALIAS'): Image.ANTIALIAS = Image.LANCZOS
@@ -23,11 +24,11 @@ if "project_path" not in st.session_state:
 
 def folder(): return st.session_state.project_path
 
-# --- 1. THE LOGIC DIRECTOR (No Chat, Pure Code) ---
+# --- 1. THE LOGIC DIRECTOR ---
 def run_logic_director(topic, n_scenes, is_short):
     st.info(f"🧠 Constructing Pro Script for '{topic}'...")
     
-    # VISUAL TEMPLATES (The "Pro" Look)
+    # VISUAL TEMPLATES
     visual_styles = [
         "Cinematic wide shot, establishing shot of {t}, golden hour lighting, 8k, hyper-realistic",
         "Macro close-up detail of {t}, intricate textures, depth of field, volumetric lighting, unreal engine 5",
@@ -37,7 +38,7 @@ def run_logic_director(topic, n_scenes, is_short):
         "Abstract artistic representation of {t}, double exposure, dreamlike, surreal concept art"
     ]
     
-    # AUDIO TEMPLATES (The Documentary Voice)
+    # AUDIO TEMPLATES
     audio_intros = [
         "The story of {t} is one of the world's greatest mysteries.",
         "Few people truly understand the power and history of {t}.",
@@ -59,11 +60,9 @@ def run_logic_director(topic, n_scenes, is_short):
     script_data = []
     
     for i in range(n_scenes):
-        # 1. Pick a Visual Style (Rotate through them so every scene is different)
         style_template = visual_styles[i % len(visual_styles)]
         visual_prompt = style_template.format(t=topic)
         
-        # 2. Pick Audio Line
         if i == 0:
             audio_text = random.choice(audio_intros).format(t=topic)
         elif i == n_scenes - 1:
@@ -78,7 +77,7 @@ def run_logic_director(topic, n_scenes, is_short):
         
     return script_data
 
-# --- 2. THE ARTIST (Flux Generator) ---
+# --- 2. THE ARTIST (Flux) ---
 def generate_pro_images(script_data, is_short):
     st.write("🎨 Generating Professional Assets (Flux Engine)...")
     my_bar = st.progress(0)
@@ -89,24 +88,18 @@ def generate_pro_images(script_data, is_short):
         filename = f"scene_{i+1}.jpg"
         filepath = os.path.join(folder(), filename)
         
-        # URL ENCODE PROMPT
         safe_prompt = requests.utils.quote(scene['visual'])
-        # Add seed for variety
         seed = random.randint(0, 99999)
-        
-        # POLLINATIONS URL (FLUX MODEL)
         url = f"https://image.pollinations.ai/prompt/{safe_prompt}?width={width}&height={height}&nologo=true&seed={seed}&model=flux"
         
-        # Download with Retry
         downloaded = False
         try:
-            r = requests.get(url, timeout=15) # Give it time to render
+            r = requests.get(url, timeout=15)
             if r.status_code == 200 and len(r.content) > 1000:
                 with open(filepath, "wb") as f: f.write(r.content)
                 downloaded = True
         except: pass
         
-        # Backup Black Screen
         if not downloaded:
             img = Image.new('RGB', (width, height), color=(15, 15, 20))
             img.save(filepath)
@@ -116,7 +109,7 @@ def generate_pro_images(script_data, is_short):
         
     return script_data
 
-# --- 3. RENDER ENGINE (Zoom) ---
+# --- 3. RENDER ENGINE ---
 def zoom_in_effect(clip, zoom_ratio=0.04):
     def effect(get_frame, t):
         img = Image.fromarray(get_frame(t))
@@ -186,11 +179,8 @@ with st.sidebar:
     scenes = st.number_input("Scenes:", 3, 10, 5)
     
     if st.button("🚀 GENERATE DRAFT", type="primary"):
-        # 1. Use Logic Director (No API Keys needed)
         data = run_logic_director(topic, scenes, is_short)
-        # 2. Generate Images
         final_data = generate_pro_images(data, is_short)
-        
         st.session_state.project_data = final_data
         st.session_state.is_short = is_short
         st.rerun()
@@ -208,7 +198,21 @@ if "project_data" in st.session_state:
                     with open(scene["image_path"], "wb") as f: f.write(up.getbuffer())
                     st.rerun()
             with c2:
-                st.code(scene['visual']) # Shows the PRO prompt
+                # --- THIS IS THE RESTORED SECTION ---
+                st.subheader("🛠️ Manual Tools")
+                st.code(scene['visual'])
+                
+                # Links for manual generation
+                q_safe = urllib.parse.quote(scene['visual'])
+                q_type = "Vertical Wallpaper" if st.session_state.get("is_short", True) else "Wide Wallpaper"
+                q_google = urllib.parse.quote(scene['visual'] + " " + q_type)
+                
+                st.markdown(f"""
+                1. [**Open Google Gemini** (Paste the code above)](https://gemini.google.com/app)
+                2. [**Search Google Images**]({f"https://www.google.com/search?q={q_google}&tbm=isch"})
+                """)
+                # ------------------------------------
+
                 new_text = st.text_area("Audio:", value=scene['audio'], key=f"txt_{i}")
                 st.session_state.project_data[i]['audio'] = new_text
 
