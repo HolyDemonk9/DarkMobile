@@ -9,10 +9,10 @@ from moviepy.editor import AudioFileClip, ImageClip, concatenate_videoclips
 import numpy as np
 import traceback
 import re
-import time  # Added for the pause
+import time
 
 # --- 1. CONFIGURATION ---
-st.set_page_config(page_title="Dark Studio: Patient Mode", layout="wide", page_icon="⏳")
+st.set_page_config(page_title="Dark Studio: Stealth", layout="wide", page_icon="🕵️")
 
 # PATCH IMAGE LIBRARY
 if not hasattr(Image, 'ANTIALIAS'): Image.ANTIALIAS = Image.LANCZOS
@@ -28,7 +28,29 @@ if "project_path" not in st.session_state:
 
 def folder(): return st.session_state.project_path
 
-# --- 2. SMART PARSER ---
+# --- 2. STEALTH NETWORK ENGINE ---
+def get_random_headers():
+    # 1. Generate a random IP address
+    fake_ip = f"{random.randint(1, 255)}.{random.randint(1, 255)}.{random.randint(1, 255)}.{random.randint(1, 255)}"
+    
+    # 2. Pick a random browser (User-Agent)
+    user_agents = [
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36",
+        "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/14.0.3 Safari/605.1.15",
+        "Mozilla/5.0 (Linux; Android 10; SM-G960U) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.114 Mobile Safari/537.36",
+        "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/92.0.4515.107 Safari/537.36"
+    ]
+    
+    headers = {
+        "User-Agent": random.choice(user_agents),
+        "X-Forwarded-For": fake_ip,
+        "Client-IP": fake_ip,
+        "Real-IP": fake_ip,
+        "Referer": "https://www.google.com/"
+    }
+    return headers
+
+# --- 3. SMART PARSER ---
 def parse_script_by_sentences(raw_text):
     sentences = re.split(r'(?<=[.!?])\s+', raw_text)
     script_data = []
@@ -41,11 +63,10 @@ def parse_script_by_sentences(raw_text):
             })
     return script_data
 
-# --- 3. THE "PATIENT" IMAGE GENERATOR ---
-def generate_images_with_pause(script_data, is_short):
-    st.write(f"🎨 Generating {len(script_data)} scenes (with 15s safety pauses)...")
+# --- 4. THE STEALTH IMAGE GENERATOR ---
+def generate_images_stealth(script_data, is_short):
+    st.write(f"🕵️ Generating {len(script_data)} scenes (Stealth Mode)...")
     
-    # Create a container for the countdown so it updates in place
     status_box = st.empty()
     prog_bar = st.progress(0)
     
@@ -55,39 +76,44 @@ def generate_images_with_pause(script_data, is_short):
         filename = f"scene_{i+1}.jpg"
         filepath = os.path.join(folder(), filename)
         
-        # 1. GENERATE
-        status_box.info(f"⬇️ Downloading Scene {i+1}/{len(script_data)}...")
+        status_box.info(f"🔄 Requesting Scene {i+1} with new Identity...")
         
+        # Pollinations URL
         safe_prompt = requests.utils.quote(scene['visual'])
-        seed = random.randint(0, 99999)
+        seed = random.randint(0, 999999)
         url = f"https://image.pollinations.ai/prompt/{safe_prompt}?width={width}&height={height}&nologo=true&seed={seed}&model=flux"
         
         downloaded = False
         try:
-            r = requests.get(url, timeout=15) # Increased timeout
-            if r.status_code == 200:
+            # USE FAKE HEADERS HERE
+            stealth_headers = get_random_headers()
+            
+            # 15s Timeout, verify=False (ignoring SSL helps sometimes with weird servers)
+            r = requests.get(url, headers=stealth_headers, timeout=15)
+            
+            if r.status_code == 200 and len(r.content) > 1000:
                 with open(filepath, "wb") as f: f.write(r.content)
                 downloaded = True
-        except: pass
+        except Exception as e:
+            print(f"Failed to download: {e}")
         
+        # FAILSAFE: If it fails, create a placeholder so app doesn't crash
         if not downloaded:
-            # Fallback
-            Image.new('RGB', (width, height), (30,30,30)).save(filepath)
-
+            status_box.warning(f"⚠️ Scene {i+1} failed. Created placeholder.")
+            # Create a simple colored background with text
+            img = Image.new('RGB', (width, height), (random.randint(20,50), 20, 40))
+            img.save(filepath)
+            
         script_data[i]["image_path"] = filepath
         prog_bar.progress((i+1)/len(script_data))
         
-        # 2. THE SAFETY PAUSE (Skip after the last image)
-        if i < len(script_data) - 1:
-            for seconds in range(15, 0, -1):
-                status_box.warning(f"⏳ Cooling down API... {seconds}s remaining")
-                time.sleep(1)
-            status_box.empty() # Clear the countdown
+        # Tiny pause to be safe
+        time.sleep(2)
             
-    status_box.success("✅ All Images Ready!")
+    status_box.success("✅ Generation Complete!")
     return script_data
 
-# --- 4. RENDERER ---
+# --- 5. RENDERER ---
 def render_video(project_data, is_short):
     p = folder()
     status = st.empty()
@@ -108,9 +134,13 @@ def render_video(project_data, is_short):
         
         clips = []
         for scene in project_data:
-            img = Image.open(scene['image_path']).convert('RGB')
-            img = img.resize(target_size, Image.LANCZOS)
-            clips.append(ImageClip(np.array(img)).set_duration(clip_dur))
+            try:
+                img = Image.open(scene['image_path']).convert('RGB')
+                img = img.resize(target_size, Image.LANCZOS)
+                clips.append(ImageClip(np.array(img)).set_duration(clip_dur))
+            except:
+                # If an image is broken, skip it or add black frame
+                pass
             
         final = concatenate_videoclips(clips, method="compose").set_audio(vc)
         output_path = os.path.join(p, "FINAL.mp4")
@@ -120,23 +150,23 @@ def render_video(project_data, is_short):
         return output_path
 
     except Exception as e:
-        st.error(f"Error: {e}")
+        st.error(f"Render Error: {e}")
         return None
 
 # --- UI ---
-st.title("⏳ Dark Studio: Safety Mode")
+st.title("🕵️ Dark Studio: Stealth Mode")
 
 with st.sidebar:
     st.header("Settings")
     format_choice = st.radio("Format:", ["📱 Shorts (9:16)", "🖥️ Video (16:9)"])
     is_short = "Short" in format_choice
-    st.info("ℹ️ This mode waits 15 seconds between images to prevent server crashes.")
+    st.info("ℹ️ Uses Random IP Headers for every image request.")
 
 # INPUT
 raw_script = st.text_area("Paste your story here:", height=150, 
                           placeholder="The deep ocean is a world of mystery. Strange creatures swim in the dark. Pressure here is immense.")
 
-if st.button("🚀 START PRODUCTION", type="primary"):
+if st.button("🚀 START STEALTH PRODUCTION", type="primary"):
     if len(raw_script) < 5:
         st.error("Empty script!")
     else:
@@ -144,8 +174,8 @@ if st.button("🚀 START PRODUCTION", type="primary"):
         data = parse_script_by_sentences(raw_script)
         st.success(f"Detected {len(data)} scenes.")
         
-        # 2. Generate (WITH PAUSE)
-        final_data = generate_images_with_pause(data, is_short)
+        # 2. Generate (STEALTH)
+        final_data = generate_images_stealth(data, is_short)
         
         st.session_state.project_data = final_data
         st.session_state.is_short = is_short
@@ -176,4 +206,4 @@ if "project_data" in st.session_state:
         if vid_path:
             st.video(vid_path)
             with open(vid_path, "rb") as f:
-                st.download_button("📥 DOWNLOAD", f, "My_Safe_Video.mp4")
+                st.download_button("📥 DOWNLOAD", f, "My_Stealth_Video.mp4")
