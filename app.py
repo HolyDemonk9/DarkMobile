@@ -11,6 +11,9 @@ from PIL import Image, ImageDraw, ImageFont
 from moviepy.editor import AudioFileClip, ImageClip, concatenate_videoclips, CompositeAudioClip, afx
 import shutil
 
+# COMPATIBILITY PATCH
+if not hasattr(Image, 'ANTIALIAS'): Image.ANTIALIAS = Image.LANCZOS
+
 # CONFIG
 st.set_page_config(page_title="Dark Studio Mobile", layout="centered", page_icon="🎬")
 
@@ -67,7 +70,6 @@ def get_images(topic):
         time.sleep(1) 
     st.success(f"✅ Images Ready!")
 
-# --- NEW: AI SCRIPT GENERATOR ---
 def generate_ai_script(topic):
     st.info("🧠 AI is thinking...")
     style = st.session_state.get("stolen_prompt", "dark and mysterious")
@@ -76,8 +78,8 @@ def generate_ai_script(topic):
     try:
         txt = requests.get(f"https://text.pollinations.ai/{urllib.parse.quote(prompt)}").text
         st.session_state.generated_script = txt
-        st.success("✅ Script Written! (You can edit it below)")
-        st.rerun() # Refresh page to show script
+        st.success("✅ Script Written!")
+        st.rerun() 
     except Exception as e:
         st.error(f"AI Failed: {e}")
 
@@ -91,20 +93,44 @@ def get_audio_from_text(text_script):
     st.success("✅ Audio Ready!")
 
 def render_video():
-    st.write("🎬 Rendering...")
+    st.write("🎬 Rendering (Bulletproof Mode)...")
     p = folder()
     try:
+        # 1. AUDIO CHECK
         if not os.path.exists(os.path.join(p, "voice.mp3")): 
             st.error("❌ No Audio! Record voice first.")
             return
         
         vc = AudioFileClip(os.path.join(p, "voice.mp3"))
+        
+        # 2. IMAGE CHECK
         files = sorted([os.path.join(p, f) for f in os.listdir(p) if f.endswith(".jpg")])
         if len(files) == 0:
             st.error("❌ No images found!")
             return
 
-        # Safe Music
+        # 3. BUILD CLIPS (Using PIL Method - Fixes the Crash)
+        dur = vc.duration / len(files)
+        clips = []
+        
+        for f in files:
+            try:
+                # Load with PIL -> Convert to Array -> Clip
+                # This bypasses the FFmpeg image reader which fails on cloud
+                pil_img = Image.open(f).convert('RGB')
+                pil_img = pil_img.resize((1080, 1920), Image.ANTIALIAS)
+                img_array = np.array(pil_img)
+                
+                clip = ImageClip(img_array).set_duration(dur)
+                clips.append(clip)
+            except Exception as e:
+                st.warning(f"Skipped bad image {f}: {e}")
+
+        if not clips:
+            st.error("❌ Critical Error: All images failed to load.")
+            return
+
+        # 4. MUSIC (Safe Mode)
         final_audio = vc
         try:
             m_url = "https://ia800300.us.archive.org/17/items/TheSlenderManSong/Anxiety.mp3"
@@ -117,12 +143,7 @@ def render_video():
                 final_audio = CompositeAudioClip([vc, mc.volumex(0.15)])
         except: pass
 
-        dur = vc.duration / len(files)
-        clips = []
-        for f in files:
-            try: clips.append(ImageClip(f).resize((1080, 1920)).set_duration(dur))
-            except: pass
-            
+        # 5. FINAL EXPORT
         final = concatenate_videoclips(clips, method="compose").set_audio(final_audio)
         output_path = os.path.join(p, "FINAL.mp4")
         final.write_videofile(output_path, fps=24, preset="ultrafast")
@@ -135,10 +156,10 @@ def render_video():
     except Exception as e: st.error(f"Render Failed: {e}")
 
 # --- UI LAYOUT ---
-st.title("📱 Dark Studio v2.1")
-st.caption("AI Writer Restored")
+st.title("📱 Dark Studio v2.2")
+st.caption("School Project Edition")
 
-# 1. STYLE
+# 1. STRATEGY
 st.header("1. Strategy")
 mode = st.radio("Mode:", ["Manual Vibe", "YouTube Hacker"])
 if mode == "YouTube Hacker":
@@ -157,21 +178,20 @@ col1, col2 = st.columns(2)
 if col1.button("Generate Images"):
     get_images(topic)
 
-if col2.button("✨ WRITE SCRIPT FOR ME"):
+if col2.button("✨ WRITE SCRIPT"):
     generate_ai_script(topic)
 
 # SCRIPT EDITOR
 st.subheader("Script Editor")
-# This box now fills with the AI script automatically
-script_text = st.text_area("Review Script:", value=st.session_state.generated_script, height=150, placeholder="Click 'Write Script For Me' to generate text...")
+script_text = st.text_area("Review Script:", value=st.session_state.generated_script, height=150)
 
-if st.button("🎙️ Record Voice from Script"):
+if st.button("🎙️ Record Voice"):
     if len(script_text) < 5:
-        st.error("Script is empty! Write something or click 'Write Script For Me'.")
+        st.error("Script is empty!")
     else:
         get_audio_from_text(script_text)
 
-# 3. RENDER
+# 3. PRODUCTION
 st.header("3. Production")
 img_count = len([f for f in os.listdir(folder()) if f.endswith(".jpg")])
 st.caption(f"Status: {img_count} Images Ready")
